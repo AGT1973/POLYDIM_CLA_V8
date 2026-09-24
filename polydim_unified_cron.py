@@ -38,7 +38,7 @@ WATCHDOG_STATE = THEORY_DIR / ".watchdog_state.json"
 
 # Mail config
 MAIL_SECRETS = EMAIL_DIR / ".secrets"
-MAIL_VAULTS = ["account_a2a", "account_sota", "account_cursos", "account_clone"]
+MAIL_VAULTS = ["account_a2a", "account_sota", "account_clone"]
 MAIL_INBOX = EMAIL_DIR / "AGENT_INBOX"
 MAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 

@@ -2850,3 +2850,169 @@ Project \(\Omega\) onto the subalgebra \(\mathfrak p\) that preserves the chosen
 For any smooth curve \(R(t)\) the parallel transport of the null line is given by
 
 ---
+
+
+## 🌙 Ciclo de Falsación Nocturna #19 — 2026-09-24 11:10:16
+
+### 1. Benchmark Físico VRKMK-4 (Gauss-Legendre 2 Etapas)
+| D | Pasos | h | Deriva RKMK Explícito | Deriva VRKMK Simpléctico | Ratio Simpléctico | Ortogonalidad VRK |
+|---|---|---|---|---|---|---|
+| 16 | 13280 | 0.007504731764849962 | 3.84e-13 | 0.00e+00 | 3836.9x | 2.35e-15 |
+| 32 | 26593 | 0.0030018927059399848 | 2.84e-13 | 5.68e-14 | 5.0x | 5.18e-14 |
+| 64 | 53227 | 0.0015009463529699924 | 1.25e-12 | 1.14e-13 | 11.0x | 1.19e-13 |
+| 128 | 133087 | 0.001 | 7.28e-12 | 0.00e+00 | 72759.6x | 5.35e-13 |
+
+### 2. Benchmark Físico WittFrame Cl(p, q) con Histéresis
+| Signatura | Iteraciones | Chattering Sin Histéresis | Chattering Con Histéresis | Reducción Ruido | Error Par (n, ℓ) |
+|---|---|---|---|---|---|
+| 3+, 1- | 20000 | 10020 | 0 | 100.0% | 2.22e-16 |
+| 4+, 4- | 50000 | 0 | 0 | 100.0% | 2.22e-16 |
+| 8+, 8- | 100000 | 0 | 0 | 100.0% | 2.22e-16 |
+
+### 3. Arbitraje y Repreguntas a Cerebras WSE (gpt-oss-120b)
+
+#### Tópico: `VRKMK-4 Symplecticity & dexp^{-1} Truncation`
+**Consulta Inicial:**
+> We benchmarked a 2-stage Gauss-Legendre Variational Runge-Kutta Munthe-Kaas (VRKMK-4) on SO(128) against explicit RKMK-4 over 133087 steps with h=0.001. Empirical results: Explicit RKMK energy drift was 7.28e-12, while VRKMK-4 energy drift was 0.00e+00 (an improvement of 72759.6x). Lie algebra dexp^{-1} was truncated to order 4: V - 0.5[xi, V] + (1/12)[xi, [xi, V]]. Does this truncation strictly conserve the symplectic 2-form or does it induce an O(h^5) non-Hamiltonian perturbation?
+
+**Veredicto Cerebras (Pasada 1):**
+**Answer:**  
+The fourth‑order truncation  
+
+\[
+\operatorname{dexp}^{-1}_{\xi}V
+   = V-\tfrac12[\xi,V]+\tfrac1{12}[\xi,[\xi,V]]+{\cal O}(\|\xi\|^{4})
+\tag{1}
+\]
+
+does **not** preserve the symplectic 2‑form exactly; it introduces a perturbation that is **non‑Hamiltonian of order \(h^{5}\)** (because \(\xi=O(h)\) for a step of size \(h\)). The method remains symplectic **up to** that order, i.e. it is a *fourth‑order symplectic integrator* in the sense of backward‑error analysis, but the truncated dexp\(^{-1}\) itself is not a symplectic map.
+
+Below is a rigorous justification.
+
+--------------------------------------------------------------------
+### 1. Exact dexp\(^{-1}\) and symplecticity
+
+For a Lie group \(G\) with Lie algebra \(\mathfrak g\) and a left‑invariant symplectic form \(\omega\) (e.g. the canonical Lie‑Poisson form on \(T^{*}G\) or the bi‑invariant metric on \(\mathrm{SO}(n)\)), the exact exponential map satisfies  
+
+\[
+\Phi_{h} = \exp\!\bigl(h\,\operatorname{dexp}^{-1}_{\xi}V\bigr)
+\qquad\Longrightarrow\qquad
+\Phi_{h}^{*}\omega = \omega .
+\tag{2}
+\]
+
+Indeed, \(\operatorname{dexp}^{-1}_{\xi}\) is the inverse of the differential of the exponential map, which is the Jacobian of a symplectic diffeomorphism; consequently its transpose (with respect to the metric) equals its inverse, guaranteeing preservation of \(\omega\).
+
+The exact series is  
+
+\[
+\operatorname{dexp}^{-1}_{\xi}
+   = \frac{\operatorname{ad}_{\xi}}{e^{\operatorname{ad}_{\xi}}-I}
+   = \sum_{k=0}^{\infty} \frac{B_{k}}{k!}\operatorname{ad}_{\xi}^{\,k},
+\tag{3}
+\]
+
+with \(B_{k}\) the Bernoulli numbers. All terms are **linear combinations of nested commutators** and therefore generate a **Hamiltonian vector field** (the Lie‑Poisson bracket of any two Hamiltonians is again Hamiltonian). Hence the exact map is symplectic.
+
+--------------------------------------------------------------------
+### 2. Truncation error
+
+Truncating (3) after the \(\operatorname{ad}_{\xi}^{2}\) term yields (1). The remainder is  
+
+\[
+R_{\xi}V
+   = \sum_{k=3}^{\infty}\frac{B_{k}}{k!}\operatorname{ad}_{\xi}^{\,k}V
+   = {\cal O}(\|\xi\|^{4}) .
+\tag{4}
+\]
+
+For a Runge–Kutta–Munthe‑Kaas step we have \(\xi = h\,\tilde\xi\) with \(\tilde\xi = O(1)\). Consequently  
+
+\[
+R_{\xi}V = O(h^{4}) .
+\tag{5}
+\]
+
+When this remainder is inserted into the stage equations, the *local* error in the Lie‑algebra element is \(O(h^{5})\) because the stage equations themselves are multiplied by the step size \(h\). Hence the **modified differential equation** satisfied by the numerical flow is  
+
+\[
+\dot{g}=g\Bigl( V -\tfrac12[\xi,V]+\tfrac1{12}[\xi,[\xi,V]]
+               + h^{5}\,\Delta_{5}(g) \Bigr),
+\tag{6}
+\]
+
+where \(\Delta_{5}\) is a smooth vector field independent of \(h\).
+
+--------------------------------------------------------------------
+### 3. Hamiltonian vs. non‑Hamiltonian part of the remainder
+
+The exact series (3) consists solely of **Hamiltonian** vector fields because each \(\operatorname{ad}_{\xi}^{k}V\) can be written as the Poisson bracket \(\{H
+
+---
+#### Tópico: `WittFrame Null Pair Parallel Transport & Holonomy`
+**Consulta Inicial:**
+> In Clifford algebra Cl(8,8), we implemented a Witt null pair (n, ell) satisfying n^T G ell = 1.0 with max empirical drift 2.22e-16. We added hysteresis bands (tau_enter=1e-12, tau_exit=1e-10) to classify Spacelike/Timelike/NearNull vectors. Chattering across the null cone was reduced by 100.0%. Under continuous Lorentz boosts R = exp(-B/2), does parallel transport of the Witt pair introduce topological phase jumps or Berry holonomy?
+
+**Veredicto Cerebras (Pasada 1):**
+**Executive Summary (no filler)**  
+- **Result:** For a *continuous* Lorentz boost \(R=\exp(-B/2)\) acting on a Witt null pair \((n,\ell)\) in \(\mathrm{Cl}(8,8)\) the parallel‑transported pair \((n',\ell')\) acquires **no geometric (Berry) phase**; any apparent phase jump is a *pure gauge* artifact of the chosen spinor frame and is limited to machine‑precision drift \(\mathcal{O}(10^{-16})\).  
+- **Exception:** If the boost loop winds non‑trivially around the non‑simply‑connected component of \(\mathrm{SO}(8,8)\) (i.e. encloses the \(\mathbb{Z}_2\) element of \(\pi_1\)), the holonomy reduces to a **sign flip** (\(\pi\)‑phase) on the spinor representation. This is the only topological contribution.
+
+Below is the full derivation, asymptotic error analysis, and a reference implementation.
+
+---
+
+## 1. Algebraic Setting
+
+### 1.1. Metric and Witt Basis
+Let \(G\) be the diagonal metric of signature \((8,8)\):
+\[
+G = \operatorname{diag}(\underbrace{+1,\dots,+1}_{8},
+\underbrace{-1,\dots,-1}_{8}) .
+\]
+A Witt null pair \((n,\ell)\) satisfies
+\[
+n^T G \ell = 1,\qquad n^T G n = \ell^T G \ell = 0 .
+\]
+Define the *null projectors*
+\[
+P_{\pm}= \frac12\bigl(I \pm G\, n\ell^T\bigr),\qquad
+P_{+}n = n,\; P_{-}\ell = \ell .
+\]
+
+### 1.2. Spin Representation
+The Clifford algebra \(\mathrm{Cl}(8,8)\) admits a real spinor module \(\mathbb{S}\) of dimension \(2^{8}=256\). The double cover
+\[
+\mathrm{Spin}(8,8) \xrightarrow{\,\rho\,} \mathrm{SO}(8,8)
+\]
+acts on vectors by
+\[
+v \mapsto R v R^{-1},\qquad R\in\mathrm{Spin}(8,8),\; R\tilde R = 1 .
+\]
+A boost is generated by a bivector \(B\in\Lambda^2\mathbb{R}^{8,8}\) with \(B^T G = - G B\). The exponential
+\[
+R(\theta)=\exp\!\bigl(-\tfrac{\theta}{2}B\bigr)
+\]
+is a one‑parameter subgroup of \(\mathrm{Spin}(8,8)\).
+
+---
+
+## 2. Parallel Transport of a Witt Pair
+
+### 2.1. Definition
+Parallel transport along a curve \(\gamma(t)\) in the Lorentz group is defined by the *Cartan connection* on the principal \(\mathrm{Spin}(8,8)\) bundle:
+\[
+\frac{d}{dt}R(t) = -\frac12 B\,R(t),\qquad R(0)=\mathbf{1}.
+\]
+The transported null vectors are
+\[
+n(t)=R(t)\,n\,R(t)^{-1},\qquad
+\ell(t)=R(t)\,\ell\,R(t)^{-1}.
+\]
+
+### 2.2. Preservation of the Witt Condition
+Because \(R(t)\) is an orthogonal similarity,
+\[
+n(t)^T G \ell(t) = n^T R(t)^T G R(t) \ell = n^T G \ell =
+
+---
