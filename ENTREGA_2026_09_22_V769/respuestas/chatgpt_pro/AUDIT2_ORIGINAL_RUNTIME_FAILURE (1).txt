@@ -1,0 +1,16 @@
+original_lib_selftest_all= 0
+original_lib_check_ftz= 1
+================================================================================
+🏛️ POLYDIM V769 — INDUSTRIAL VERIFICATION & RED TEAM MONOLITH
+================================================================================
+[HW_PROBE] OS: linux | CPU Cores: 5 | CUDA: False (None)
+[HW_PROBE] IEEE-754 eps_mach: 2.22e-16
+Traceback (most recent call last):
+  File "/mnt/data/audit2_orig_run/polydim_v769_monolito.py", line 561, in <module>
+    run_v769_global_suite()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/mnt/data/audit2_orig_run/polydim_v769_monolito.py", line 374, in run_v769_global_suite
+    binding = PolydimNativeBinding(build_dir)
+  File "/mnt/data/audit2_orig_run/polydim_v769_monolito.py", line 159, in __init__
+    raise FileNotFoundError(f"Cannot find polydim.dll in {dll_dir}")
+FileNotFoundError: Cannot find polydim.dll in /mnt/data/audit2_orig_run/build

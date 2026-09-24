@@ -1,0 +1,286 @@
+--- kernel_cpp_v769.cpp.txt
++++ kernel_cpp_v769.cpp
+@@ -51,7 +51,7 @@
+ 
+ /* FTZ/DAZ apagado por defecto para conformidad IEEE-754 estricta salvo opt-in */
+ #ifndef POLYDIM_ENABLE_FTZ
+-  #define POLYDIM_ENABLE_FTZ 1
++  #define POLYDIM_ENABLE_FTZ 0
+ #endif
+ 
+ #ifndef POLYDIM_MAX_K
+@@ -891,6 +891,21 @@
+     );
+ }
+ 
++static inline void* pmtp2_payload_of(PMTP_Control* c, uint32_t slot) {
++    return reinterpret_cast<void*>(
++        reinterpret_cast<char*>(c) + sizeof(PMTP_Control)
++        + static_cast<size_t>(c->num_slots) * sizeof(PMTP_SlotHeader)
++        + static_cast<size_t>(slot) * static_cast<size_t>(c->payload_bytes)
++    );
++}
++
++extern "C" POLYDIM_EXPORT void* POLYDIM_CALL polydim_pmtp_payload_ptr(PMTP_Control* c, uint32_t slot) {
++    try {
++        if (!c || slot >= c->num_slots) return nullptr;
++        return pmtp2_payload_of(c, slot);
++    } catch (...) { return nullptr; }
++}
++
+ static void pmtp2_lock(PMTP_Control* c) {
+     uint32_t t = c->wticket.fetch_add(1, std::memory_order_relaxed);
+     while (c->wlock.load(std::memory_order_acquire) != t) {
+--- polydim.h.txt
++++ polydim.h
+@@ -120,6 +120,7 @@
+ 
+ POLYDIM_EXPORT uint64_t POLYDIM_CALL polydim_pmtp_sizeof(uint32_t num_slots, uint64_t payload_bytes);
+ POLYDIM_EXPORT uint64_t POLYDIM_CALL polydim_pmtp_alignof(void);
++POLYDIM_EXPORT void*    POLYDIM_CALL polydim_pmtp_payload_ptr(PMTP_Control* c, uint32_t slot);
+ POLYDIM_EXPORT int32_t POLYDIM_CALL polydim_pmtp_init(PMTP_Control* c, uint32_t num_slots, uint64_t payload_bytes);
+ POLYDIM_EXPORT int32_t POLYDIM_CALL polydim_pmtp_write_begin(PMTP_Control* c, uint32_t* slot, uint64_t* ver);
+ POLYDIM_EXPORT void POLYDIM_CALL polydim_pmtp_write_commit(PMTP_Control* c, uint32_t slot, uint64_t ver);
+@@ -132,6 +133,7 @@
+  * ------------------------------------------------------------------------*/
+ POLYDIM_EXPORT int32_t POLYDIM_CALL polydim_selftest_compensation(double* observed_err);
+ POLYDIM_EXPORT int32_t POLYDIM_CALL polydim_selftest_all(void);
++POLYDIM_EXPORT int32_t POLYDIM_CALL polydim_check_ftz(void);
+ POLYDIM_EXPORT const char* POLYDIM_CALL polydim_status_string(int32_t code);
+ POLYDIM_EXPORT const char* POLYDIM_CALL polydim_build_info(void);
+ 
+--- polydim_v769_monolito.py.txt
++++ polydim_v769_monolito.py
+@@ -87,56 +87,95 @@
+     ]
+ 
+ class PMTPSlabChannel:
+-    def __init__(self, name="polydim_bus_0", d=1024, num_slots=4):
++    def __init__(self, binding=None, name="polydim_bus_0", d=1024, num_slots=4):
+         self.d = d
+         self.num_slots = num_slots
+         self.payload_bytes = d * 8
+         self.shm_name = name
+         self.mmap_obj = None
+-        self._pin_refs = [] # Pin GC
+-        
+-        # POSIX shm / Win32 mmap
++        self._pin_refs = []  # Pin GC
++        self.binding = binding
++
+         import mmap
+         import os
+         self.is_posix = os.name == 'posix'
+-        
+-        # We allocate a fixed capacity or calculate via polydim_pmtp_sizeof
+-        # For simplicity, 1MB buffer
+-        self.total_bytes = 1024 * 1024 * 10 
+-        
++
++        if binding is not None:
++            total = int(binding.lib.polydim_pmtp_sizeof(
++                ctypes.c_uint32(num_slots), ctypes.c_uint64(self.payload_bytes)
++            ))
++            if total <= 0:
++                raise RuntimeError("polydim_pmtp_sizeof returned invalid size")
++            self.total_bytes = total
++        else:
++            # Safe fallback for legacy callers; real PMTP must pass binding.
++            self.total_bytes = 1024 * 1024 * 10
++
+         if self.is_posix:
++            from multiprocessing import shared_memory
+             try:
+-                from multiprocessing import shared_memory
+                 self.shm = shared_memory.SharedMemory(create=True, name=self.shm_name, size=self.total_bytes)
+-                self.mmap_obj = self.shm.buf
+-            except Exception:
+-                from multiprocessing import shared_memory
++            except FileExistsError:
+                 self.shm = shared_memory.SharedMemory(name=self.shm_name)
+-                self.mmap_obj = self.shm.buf
++            self.mmap_obj = self.shm.buf
+         else:
+             self.mmap_obj = mmap.mmap(-1, self.total_bytes, self.shm_name)
+-            
++
+         self.ctrl = PMTPControl.from_buffer(self.mmap_obj)
+         self.ctrl_ptr = ctypes.pointer(self.ctrl)
+         self._pin_refs.extend([self.ctrl_ptr, self.mmap_obj])
+ 
++        if binding is not None:
++            rc = binding.lib.polydim_pmtp_init(self.ctrl_ptr, ctypes.c_uint32(num_slots), ctypes.c_uint64(self.payload_bytes))
++            if rc != 0:
++                raise RuntimeError(f"polydim_pmtp_init failed rc={rc}")
++
+     def write_tensor(self, binding, tensor_np):
+         if tensor_np.dtype != np.float64:
+             raise ValueError("Tensor must be float64 to avoid PMTP memory corruption")
++        if tensor_np.ndim != 1 or tensor_np.size != self.d:
++            raise ValueError(f"Tensor shape must be ({self.d},)")
++        if not tensor_np.flags["C_CONTIGUOUS"]:
++            tensor_np = np.ascontiguousarray(tensor_np, dtype=np.float64)
++
+         slot_out = ctypes.c_uint32(0)
+         ver_out = ctypes.c_uint64(0)
+         rc = binding.lib.polydim_pmtp_write_begin(self.ctrl_ptr, ctypes.byref(slot_out), ctypes.byref(ver_out))
+         if rc != 0:
+             return rc
+-        # Omitted payload write for brevity
++
++        payload_addr = binding.lib.polydim_pmtp_payload_ptr(self.ctrl_ptr, slot_out.value)
++        if not payload_addr:
++            binding.lib.polydim_pmtp_write_abort(self.ctrl_ptr, slot_out.value, ver_out.value)
++            return -1
++
++        ctypes.memmove(payload_addr, tensor_np.ctypes.data, self.payload_bytes)
+         binding.lib.polydim_pmtp_write_commit(self.ctrl_ptr, slot_out.value, ver_out.value)
+         return 0
++
++    def read_tensor(self, binding):
++        slot_out = ctypes.c_uint32(0)
++        ver_out = ctypes.c_uint64(0)
++        rc = binding.lib.polydim_pmtp_read_begin(self.ctrl_ptr, ctypes.byref(slot_out), ctypes.byref(ver_out))
++        if rc != 0:
++            return rc, None
++
++        payload_addr = binding.lib.polydim_pmtp_payload_ptr(self.ctrl_ptr, slot_out.value)
++        if not payload_addr:
++            return -1, None
++
++        arr_type = ctypes.c_double * self.d
++        view = np.ctypeslib.as_array(arr_type.from_address(payload_addr)).copy()
++        rc2 = binding.lib.polydim_pmtp_read_validate(self.ctrl_ptr, slot_out.value, ver_out.value)
++        if rc2 != 0:
++            return rc2, None
++        return 0, view
+ 
+     def __del__(self):
+         if getattr(self, 'is_posix', False) and hasattr(self, 'shm'):
+             self.shm.close()
+             try:
+-                self.shm.unlink() # Kimi (M3): Unlink fd in POSIX
++                self.shm.unlink()
+             except:
+                 pass
+         elif self.mmap_obj:
+@@ -147,17 +186,37 @@
+         self.mmap_obj = None
+ 
+ class PolydimNativeBinding:
++    @staticmethod
++    def _find_native_library(dll_dir: str, names: list[str], required: bool = True):
++        candidates = []
++        for name in names:
++            candidates.extend([
++                os.path.join(dll_dir, name),
++                os.path.join(os.path.dirname(dll_dir), name),
++                name,
++            ])
++        for c in candidates:
++            if os.path.exists(c):
++                return c
++        if required:
++            raise FileNotFoundError(f"Cannot find native library. Tried: {candidates}")
++        return None
++
+     def __init__(self, dll_dir: str):
+-        self.dll_path = os.path.join(dll_dir, "polydim.dll")
+-        self.rust_path = os.path.join(dll_dir, "polydim_rust_guard.dll")
+-        
+-        if not os.path.exists(self.dll_path):
+-            alt_path = os.path.join(dll_dir, "libpolydim.dll")
+-            if os.path.exists(alt_path):
+-                self.dll_path = alt_path
+-            else:
+-                raise FileNotFoundError(f"Cannot find polydim.dll in {dll_dir}")
+-                
++        self.dll_path = self._find_native_library(
++            dll_dir,
++            ["polydim.dll", "libpolydim.dll"] if sys.platform == "win32"
++            else (["libpolydim.dylib", "polydim.dylib"] if sys.platform == "darwin"
++                  else ["libpolydim.so", "polydim.so"])
++        )
++        self.rust_path = self._find_native_library(
++            dll_dir,
++            ["polydim_rust.dll", "polydim_rust_guard.dll", "libpolydim_rust.dll"] if sys.platform == "win32"
++            else (["libpolydim_rust.dylib", "polydim_rust.dylib"] if sys.platform == "darwin"
++                  else ["libpolydim_rust.so", "polydim_rust.so"]),
++            required=False
++        )
++
+         if sys.platform == "win32":
+             mingw_bin = r"E:\winlibs_gcc14_zip\mingw64\bin"
+             if os.path.exists(mingw_bin):
+@@ -175,7 +234,7 @@
+         self._bind_cpp_symbols()
+         
+         self.rust_lib = None
+-        if os.path.exists(self.rust_path):
++        if self.rust_path and os.path.exists(self.rust_path):
+             try:
+                 self.rust_lib = ctypes.CDLL(self.rust_path, winmode=0 if sys.platform == "win32" else None)
+                 self._bind_rust_symbols()
+@@ -227,6 +286,8 @@
+         self.lib.polydim_pmtp_sizeof.argtypes = [ctypes.c_uint32, ctypes.c_uint64]
+         self.lib.polydim_pmtp_sizeof.restype = ctypes.c_uint64
+         self.lib.polydim_pmtp_alignof.argtypes = []
++        self.lib.polydim_pmtp_payload_ptr.argtypes = [ctypes.POINTER(PMTPControl), ctypes.c_uint32]
++        self.lib.polydim_pmtp_payload_ptr.restype = ctypes.c_void_p
+         self.lib.polydim_pmtp_init.argtypes = [ctypes.POINTER(PMTPControl), ctypes.c_uint32, ctypes.c_uint64]
+         
+         self.lib.polydim_pmtp_write_begin.argtypes = [ctypes.POINTER(PMTPControl), ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint64)]
+@@ -419,13 +480,18 @@
+     pmtp_ctrl = ctypes.cast(pmtp_buffer, ctypes.POINTER(PMTPControl))
+     binding.lib.polydim_pmtp_init(pmtp_ctrl, 4, 10000 * 8)
+     
+-    # 4 data slots in shared memory
++    # Native data slots live inside the PMTP slab, immediately after control + slot headers.
+     d_shm = 10000
+-    shared_payloads = [np.zeros(d_shm, dtype=np.float64) for _ in range(4)]
+-    
+     stop_event = threading.Event()
+     writer_writes = 1000
+     reader_stats = [{"reads": 0, "races": 0, "success": 0, "corrupt": 0} for _ in range(4)]
++
++    def _payload_array(slot_idx: int):
++        addr = binding.lib.polydim_pmtp_payload_ptr(pmtp_ctrl, ctypes.c_uint32(slot_idx))
++        if not addr:
++            raise RuntimeError("polydim_pmtp_payload_ptr returned NULL")
++        arr_t = ctypes.c_double * d_shm
++        return np.ctypeslib.as_array(arr_t.from_address(addr))
+ 
+     def pmtp_writer():
+         slot_out = ctypes.c_uint32(0)
+@@ -435,8 +501,8 @@
+             if rc_bw != 0:
+                 continue
+             slot_idx = slot_out.value
+-            # Escribir payload con firma monotónica
+-            shared_payloads[slot_idx].fill(float(i))
++            # Escribir payload real dentro del slab PMTP nativo con firma monotónica.
++            _payload_array(slot_idx).fill(float(i))
+             binding.lib.polydim_pmtp_write_commit(pmtp_ctrl, slot_out.value, ver_out.value)
+             import time
+             time.sleep(0.0001)
+@@ -454,16 +520,15 @@
+                 if rc_br == -3:
+                     reader_stats[r_id]["races"] += 1
+                 continue
+-                
++
+             slot_idx = slot_out.value
+-            np.copyto(local_buf, shared_payloads[slot_idx])
+-            
++            np.copyto(local_buf, _payload_array(slot_idx))
++
+             rc_vr = binding.lib.polydim_pmtp_read_validate(pmtp_ctrl, slot_idx, ver_out.value)
+             if rc_vr != 0:
+                 reader_stats[r_id]["races"] += 1
+                 continue
+-                
+-            # Verify payload coherence
++
+             val = local_buf[0]
+             if not np.all(local_buf == val):
+                 reader_stats[r_id]["corrupt"] += 1

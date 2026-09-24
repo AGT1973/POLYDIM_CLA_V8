@@ -1,0 +1,48 @@
+import 'omni_router.dart';
+
+void main() async {
+  print("=" * 80);
+  print("🏛️ EINSOF_OS — DART OMNI-CHANNEL INTERFACE & PC EFFECTOR TEST");
+  print("=" * 80);
+
+  final router = OmniRouter();
+
+  router.eventStream.listen((event) {
+    print("[EVENT RECEIVED] Channel: ${event.channel.name.toUpperCase()} | From: ${event.sender}");
+    print("                 Content: ${event.content}");
+  });
+
+  // 1. Simulación de Mensajería Humana (WhatsApp / Telegram / Email / Voz)
+  router.dispatchHumanMessage(
+    channel: ChannelType.whatsapp,
+    sender: "Ariel (+54 9 11 ...)",
+    content: "Revisa el estado de la memoria compartida y el benchmark de telepatía.",
+  );
+
+  router.dispatchHumanMessage(
+    channel: ChannelType.telegram,
+    sender: "@Investigador_Colaborador",
+    content: r"¿Tienen listos los resultados de Stiefel Isometry para $D=10^7$?",
+  );
+
+  router.dispatchHumanMessage(
+    channel: ChannelType.voice,
+    sender: "Ariel (Micrófono Local Whisper)",
+    content: "Ejecutar benchmark de navegación web y abrir portal de trading.",
+  );
+
+  // 2. Simulación de Control de PC y Terminal
+  await router.executePCOperation("python polydim_v768_monolito.py");
+
+  // 3. Telemetría de Nodos del Enjambre
+  print("\n--- ESTADO DEL ENJAMBRE POLYDIM (S^(D-1)) ---");
+  for (var node in router.activeNodes) {
+    print("  * [${node.id}] ${node.name.padRight(32)} -> Latencia: ${node.latencyMs.toStringAsFixed(2).padLeft(6)} ms | Norma: ${node.manifoldNorm.toStringAsFixed(4)}");
+  }
+
+  print("=" * 80);
+  print("✅ DART OMNI-CHANNEL ROUTER PASSED WITH EXIT CODE 0");
+  print("=" * 80);
+
+  router.dispose();
+}

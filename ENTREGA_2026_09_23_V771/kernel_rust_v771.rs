@@ -1,0 +1,232 @@
+// ============================================================================
+// POLYDIM V769 — NATIVE RUST TOPOLOGICAL GUARD & INVARIANT ENGINE
+// Catch-Unwind Protected FFI | Betti-1 Graph Topology | Higham Bounds on S^(D-1)
+// ============================================================================
+
+use std::panic::catch_unwind;
+use std::slice;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolydimRustStatus {
+    Success = 0,
+    ErrNullPointer = -1,
+    ErrInvalidDimension = -2,
+    ErrNanOrInf = -3,
+    ErrSubnormalDetected = -4,
+    ErrNumericalInstability = -5,
+    ErrTopologyFragmented = -6,
+    ErrBufferOverflow = -7,
+    ErrDegenerateNorm = -8,
+    ErrSeqLockRace = -9,
+    ErrPanicCaught = -99,
+}
+
+const EPS_MACH: f64 = f64::EPSILON; // 2.220446049250313e-16
+
+#[no_mangle]
+pub unsafe extern "C" fn polydim_rust_verify_invariants(
+    ptr: *const f64,
+    d: usize,
+    max_drift_out: *mut f64,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if ptr.is_null() {
+            return PolydimRustStatus::ErrNullPointer;
+        }
+        if d == 0 {
+            return PolydimRustStatus::ErrInvalidDimension;
+        }
+        if (ptr as usize) % 8 != 0 {
+            return PolydimRustStatus::ErrBufferOverflow;
+        }
+
+        let slice = slice::from_raw_parts(ptr, d);
+
+        // Neumaier compensated 2-norm summation
+        let mut sum: f64 = 0.0;
+        let mut c: f64 = 0.0;
+
+        for &val in slice {
+            if val.is_nan() || val.is_infinite() {
+                return PolydimRustStatus::ErrNanOrInf;
+            }
+
+            let sq = val * val;
+            let t = sum + sq;
+            if sum.abs() >= sq.abs() {
+                c += (sum - t) + sq;
+            } else {
+                c += (sq - t) + sum;
+            }
+            sum = t;
+        }
+
+        let norm_sq = sum + c;
+        if norm_sq <= 1e-300 {
+            return PolydimRustStatus::ErrDegenerateNorm;
+        }
+
+        let norm = norm_sq.sqrt();
+        let drift = (norm - 1.0).abs();
+
+        if !max_drift_out.is_null() {
+            *max_drift_out = drift;
+        }
+
+        // C++ V764 Alignment: Tol = 64 * eps_mach (invariant O(eps) under compensated summation)
+        let tol = 64.0 * EPS_MACH;
+        if drift > tol {
+            return PolydimRustStatus::ErrNumericalInstability;
+        }
+
+        PolydimRustStatus::Success
+    });
+
+    match result {
+        Ok(status) => status as i32,
+        Err(_) => PolydimRustStatus::ErrPanicCaught as i32,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PolydimEdge {
+    pub u: u32,
+    pub v: u32,
+    pub w: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PolydimBettiResult {
+    pub betti0: u64,
+    pub betti1: u64,
+}
+
+use std::cell::RefCell;
+
+struct BettiScratch {
+    parent: Vec<u32>,
+    rank: Vec<u8>,
+}
+
+thread_local! {
+    static BETTI_SCRATCH: RefCell<BettiScratch> = RefCell::new(BettiScratch {
+        parent: Vec::new(),
+        rank: Vec::new(),
+    });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn polydim_rust_betti1_guard(
+    num_vertices: usize,
+    num_edges: usize,
+    edges: *const PolydimEdge,
+    out: *mut PolydimBettiResult,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if edges.is_null() || out.is_null() {
+            return PolydimRustStatus::ErrNullPointer;
+        }
+        
+        let max_edges = 200_000_000;
+        if num_edges > max_edges {
+            return PolydimRustStatus::ErrBufferOverflow;
+        }
+        
+        if num_vertices == 0 {
+            *out = PolydimBettiResult { betti0: 0, betti1: 0 };
+            return PolydimRustStatus::Success;
+        }
+
+        if num_vertices > u32::MAX as usize {
+            return PolydimRustStatus::ErrBufferOverflow;
+        }
+
+        let edges_slice = slice::from_raw_parts(edges, num_edges);
+
+        BETTI_SCRATCH.with(|scratch| {
+            let mut b = scratch.borrow_mut();
+            if b.parent.len() < num_vertices {
+                b.parent.resize(num_vertices, 0);
+                b.rank.resize(num_vertices, 0);
+            }
+            
+            let b_ref = &mut *b;
+            let parent = &mut b_ref.parent[..num_vertices];
+            let rank = &mut b_ref.rank[..num_vertices];
+            
+            for i in 0..num_vertices {
+                parent[i] = i as u32;
+                rank[i] = 0;
+            }
+
+            let mut components = num_vertices as u64;
+            let mut cycles = 0u64;
+
+            fn find(parent: &mut [u32], x: u32) -> u32 {
+                let root = {
+                    let mut y = x;
+                    while parent[y as usize] != y {
+                        y = parent[y as usize];
+                    }
+                    y
+                };
+                let mut z = x;
+                while z != root {
+                    let p = parent[z as usize];
+                    parent[z as usize] = root;
+                    z = p;
+                }
+                root
+            }
+
+            fn union(parent: &mut [u32], rank: &mut [u8], x: u32, y: u32, comps: &mut u64) -> bool {
+                let rx = find(parent, x);
+                let ry = find(parent, y);
+                if rx == ry {
+                    return false;
+                }
+                let rank_x = rank[rx as usize];
+                let rank_y = rank[ry as usize];
+                if rank_x < rank_y {
+                    parent[rx as usize] = ry;
+                } else if rank_x > rank_y {
+                    parent[ry as usize] = rx;
+                } else {
+                    parent[ry as usize] = rx;
+                    rank[rx as usize] += 1;
+                }
+                *comps -= 1;
+                true
+            }
+
+            for e in edges_slice {
+                if e.u >= num_vertices as u32 || e.v >= num_vertices as u32 {
+                    return PolydimRustStatus::ErrInvalidDimension;
+                }
+                let added = union(parent, rank, e.u, e.v, &mut components);
+                if !added {
+                    cycles += 1; // Arista cierra ciclo -> +1 Betti-1
+                }
+            }
+
+        *out = PolydimBettiResult {
+            betti0: components,
+            betti1: cycles,
+        };
+
+        if components > 1 {
+            return PolydimRustStatus::ErrTopologyFragmented;
+        }
+
+        PolydimRustStatus::Success
+        }) // end with
+    });
+
+    match result {
+        Ok(status) => status as i32,
+        Err(_) => PolydimRustStatus::ErrPanicCaught as i32,
+    }
+}

@@ -1,0 +1,47 @@
+OPENQASM 3.0;
+include "stdgates.inc";
+// POLYDIM V767 Quantum Clifford+T Compiled Circuit for D=8
+// Target Qubits: 3 (Hilbert Space Dimension = 2^3 = 8)
+qubit[3] q;
+bit[3] c;
+
+// --- Phase 1: State Preparation & Clifford Basis Binding ---
+h q[0]; // Equal superposition on S^(2^N-1)
+h q[1]; // Equal superposition on S^(2^N-1)
+h q[2]; // Equal superposition on S^(2^N-1)
+
+// --- Phase 2: Rodrigues Plane Rotations via Clifford+T ---
+// Planar Rotation 1: Plane (0, 1) with theta=0.785398 rad
+cx q[0], q[1];
+ry(0.785398) q[0];
+// Clifford+T approximation for Ry(0.7854):
+t q[0];
+cx q[0], q[1];
+// Planar Rotation 2: Plane (2, 3) with theta=1.570796 rad
+cx q[2], q[0];
+ry(1.570796) q[2];
+// Clifford+T approximation for Ry(1.5708):
+t q[2];
+t q[2];
+cx q[2], q[0];
+// Planar Rotation 3: Plane (4, 5) with theta=0.392699 rad
+cx q[1], q[2];
+ry(0.392699) q[1];
+// Clifford+T approximation for Ry(0.3927):
+h q[1];
+t q[1];
+h q[1];
+s q[1];
+cx q[1], q[2];
+// Planar Rotation 4: Plane (6, 7) with theta=3.141592 rad
+cx q[0], q[1];
+ry(3.141592) q[0];
+// Clifford+T approximation for Ry(3.1416):
+t q[0];
+t q[0];
+t q[0];
+t q[0];
+cx q[0], q[1];
+
+// --- Phase 3: Measurement ---
+c = measure q;

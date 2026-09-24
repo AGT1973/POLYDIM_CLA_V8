@@ -1,0 +1,11 @@
+{
+  "id": "agt1973gmailcom/polydim-v765-linux-cert-1790012488",
+  "title": "POLYDIM Linux 3 Milestones 1790012488",
+  "code_file": "benchmark.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_tpu": "false",
+  "enable_internet": "true"
+}

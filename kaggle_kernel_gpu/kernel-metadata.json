@@ -1,0 +1,11 @@
+{
+  "id": "tradingnewtech/polydim-v765-gpu-benchmark",
+  "title": "POLYDIM V765 GPU Benchmark",
+  "code_file": "benchmark.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true"
+}

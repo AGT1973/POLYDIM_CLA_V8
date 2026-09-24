@@ -1,0 +1,7 @@
+name: polydim_ffi
+description: Puente FFI Dart para el kernel POLYDIM V762.
+publish_to: none
+environment:
+  sdk: ^3.6.0
+dependencies:
+  ffi: ^2.1.0

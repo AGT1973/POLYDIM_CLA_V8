@@ -1,0 +1,132 @@
+/**
+ * @file polydim_solver_abi.h
+ * @brief Definición canónica del ABI C para el Solver de Stiefel y Plano de Control en POLYDIM V772.
+ * @copyright POLYDIM Architecture - 2026
+ */
+
+#ifndef POLYDIM_SOLVER_ABI_H
+#define POLYDIM_SOLVER_ABI_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Códigos de Estado Terminales */
+typedef enum {
+    POLYDIM_STATUS_OK                  =  0,
+    POLYDIM_STATUS_CONVERGED_GRADIENT  =  1,
+    POLYDIM_STATUS_CONVERGED_STEP      =  2,
+    POLYDIM_STATUS_MAX_ITERATIONS      =  3,
+    POLYDIM_STATUS_ERR_NULL_PTR        = -1,
+    POLYDIM_STATUS_ERR_INVALID_DIM     = -2,
+    POLYDIM_STATUS_ERR_NUMERICAL_NAN   = -3,
+    POLYDIM_STATUS_ERR_DEGENERATE_NORM = -4,
+    POLYDIM_STATUS_ERR_ORTHO_VIOLATION = -5,
+    POLYDIM_STATUS_ERR_ALLOC           = -6,
+    POLYDIM_STATUS_ERR_UNKNOWN         = -99
+} PolydimStatusCode;
+
+/* Tipos de Retracción Stiefel */
+typedef enum {
+    POLYDIM_RETRACTION_CHOLQR2    = 0,
+    POLYDIM_RETRACTION_CAYLEY_SMW = 1,
+    POLYDIM_RETRACTION_QR_HOUSEHOLDER = 2
+} PolydimRetractionType;
+
+/* Opciones de Configuración del Optimizador */
+#pragma pack(push, 8)
+typedef struct {
+    uint64_t max_iterations;
+    double   gradient_tolerance;
+    double   step_tolerance;
+    double   objective_tolerance;
+    double   ortho_tolerance;       /* Tolerancia de ortogonalidad ||X^T X - I||_F */
+    uint32_t retraction_type;       /* PolydimRetractionType */
+    uint32_t sampling_period;       /* Periodo de registro de telemetría */
+    uint32_t num_threads;           /* Hilos OpenMP */
+    double   learning_rate;         /* Tamaño de paso base alpha */
+} PolydimSolverOptions;
+
+/* Punto Muestral de Telemetría */
+typedef struct {
+    uint64_t iteration;
+    double   objective_value;
+    double   gradient_norm;
+    double   step_size;
+    double   ortho_error;          /* ||X^T X - I||_F */
+    uint64_t elapsed_time_ns;
+} PolydimTelemetryPoint;
+
+/* Buffer de Telemetría Preasignado */
+typedef struct {
+    PolydimTelemetryPoint* points;
+    size_t   capacity;
+    size_t   recorded_count;
+} PolydimTelemetryBuffer;
+
+/* Resultado Final de la Optimización */
+typedef struct {
+    int32_t  status;                /* PolydimStatusCode */
+    uint64_t iterations_executed;
+    double   final_objective;
+    double   final_grad_norm;
+    double   final_ortho_error;
+    uint64_t total_time_ns;
+    char     status_message[256];
+} PolydimSolverResult;
+
+/* Encabezado de Slot PMTP Banked Double-Buffer Lease */
+typedef struct {
+    uint32_t active_bank;           /* 0 o 1 */
+    uint32_t writer_active;         /* 1 si hay escritor adquiriendo banco inactivo */
+    uint32_t reader_count_0;        /* Lectores activos en Banco 0 */
+    uint32_t reader_count_1;        /* Lectores activos en Banco 1 */
+    uint64_t sequence;              /* Versión monotónica */
+    uint32_t owner_pid;             /* PID del proceso que escribe */
+    uint64_t owner_start_time_ns;   /* Timestamp de inicio del proceso */
+} PmtpBankedSlotHeader;
+#pragma pack(pop)
+
+/**
+ * @brief Ejecuta la optimización completa sobre la variedad de Stiefel St(D, K) en C++.
+ * 
+ * @param problem_data Puntero a datos del problema o coeficientes de la función objetivo.
+ * @param problem_size Número de elementos en problem_data.
+ * @param X Matriz de estado inicial y final de tamaño D x K (Row-Major).
+ * @param D Dimensión ambiental (e.g. 50,000+).
+ * @param K Rango de la variedad Stiefel (e.g. 512).
+ * @param options Configuración del solucionador.
+ * @param result Estructura de salida con resultados y telemetría final.
+ * @param telemetry Buffer preasignado para registrar la trayectoria de convergencia.
+ * @return int32_t Código de estado PolydimStatusCode.
+ */
+int32_t polydim_stiefel_optimize(
+    const double*               problem_data,
+    size_t                      problem_size,
+    double*                     X,
+    size_t                      D,
+    size_t                      K,
+    const PolydimSolverOptions* options,
+    PolydimSolverResult*        result,
+    PolydimTelemetryBuffer*     telemetry
+);
+
+/**
+ * @brief Computa la Gramiana simétrica K_out = X^T * X usando BLAS dsyrk o fallback micro-tiled.
+ */
+int32_t polydim_gram_dsyrk(
+    const double* X,
+    size_t D,
+    size_t K,
+    double* K_out,
+    uint32_t num_threads
+);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POLYDIM_SOLVER_ABI_H */

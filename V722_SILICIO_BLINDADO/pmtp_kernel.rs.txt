@@ -1,0 +1,344 @@
+// ============================================================================
+// POLYDIM LATENTOS V722 SILICON — NATIVE RUST KERNEL (INDUSTRIAL GRADE)
+// ============================================================================
+// Parity with C++ V722. Raw pointers (no slice aliasing UB). ScopedSimd FTZ/DAZ.
+// ============================================================================
+
+use std::sync::atomic::AtomicU64;
+
+const EPSILON_FP32: f32 = 1e-7;
+const EPSILON_FP64: f64 = 1e-14;
+const TWO_PI: f64 = 6.283185307179586;
+const THETA_SMALL: f32 = 1e-4;
+const LOCK_BIT: u64 = 1u64 << 63;
+
+// Status codes (match C++ exactly)
+const PMTP_OK: i32            =  0;
+const PMTP_ERR_NONFINITE: i32 = -1;
+const PMTP_ERR_COLLAPSE: i32  = -2;
+const PMTP_ERR_NULLPTR: i32   = -4;
+const PMTP_ERR_BAD_ARG: i32   = -5;
+
+// ── FFI Structures ───────────────────────────────────────────────────────────
+#[repr(C, align(64))]
+pub struct PmtpHeader {
+    pub magic: u64,
+    pub abi_version: u32,
+    pub flags: u32,
+    pub dim: u32,
+    pub precision: u32,
+    pub timestamp: u64,
+    pub sequence: u64,
+    pub _pad: [u8; 16],
+}
+const _: () = assert!(std::mem::size_of::<PmtpHeader>() == 64);
+const _: () = assert!(std::mem::align_of::<PmtpHeader>() == 64);
+
+#[repr(C, align(64))]
+pub struct PmtpControl {
+    pub state: AtomicU64,
+    pub error_code: u32,
+    pub _reserved: u32,
+    pub _pad: [u8; 48],
+}
+const _: () = assert!(std::mem::size_of::<PmtpControl>() == 64);
+
+// ── SIMD FTZ/DAZ RAII Guard ──────────────────────────────────────────────────
+struct ScopedSimdRust {
+    #[cfg(target_arch = "x86_64")]
+    old_csr: u32,
+}
+
+impl ScopedSimdRust {
+    #[inline(always)]
+    unsafe fn new() -> Self {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let old_csr = core::arch::x86_64::_mm_getcsr();
+            core::arch::x86_64::_mm_setcsr((old_csr | 0x8040) & !0x3F);
+            Self { old_csr }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            Self {}
+        }
+    }
+}
+
+impl Drop for ScopedSimdRust {
+    fn drop(&mut self) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            core::arch::x86_64::_mm_setcsr(self.old_csr);
+        }
+    }
+}
+
+// ── Dot Product: 4-Way Kahan, raw pointers, ZERO branching ───────────────────
+#[no_mangle]
+pub unsafe extern "C" fn rust_dot_product(
+    a_ptr: *const f32,
+    b_ptr: *const f32,
+    dim: usize,
+) -> f64 {
+    if a_ptr.is_null() || b_ptr.is_null() || dim == 0 {
+        return 0.0;
+    }
+    let _simd = ScopedSimdRust::new();
+
+    let mut sum = [0.0f64; 4];
+    let mut c = [0.0f64; 4];
+    let mut i = 0usize;
+
+    // ZERO BRANCHING: NaN propagates via IEEE-754 contagion
+    while i + 3 < dim {
+        for k in 0..4 {
+            let y = (*a_ptr.add(i + k) as f64) * (*b_ptr.add(i + k) as f64) - c[k];
+            let tt = sum[k] + y;
+            c[k] = (tt - sum[k]) - y;
+            sum[k] = tt;
+        }
+        i += 4;
+    }
+    while i < dim {
+        let y = (*a_ptr.add(i) as f64) * (*b_ptr.add(i) as f64) - c[0];
+        let tt = sum[0] + y;
+        c[0] = (tt - sum[0]) - y;
+        sum[0] = tt;
+        i += 1;
+    }
+
+    let result = sum[0] + sum[1] + sum[2] + sum[3];
+    if !result.is_finite() {
+        return f64::NAN;
+    }
+    result
+}
+
+// ── Normalize: FP64 throughout, output norm via pointer ──────────────────────
+#[no_mangle]
+pub unsafe extern "C" fn rust_normalize_s_d(
+    vec_ptr: *mut f32,
+    dim: usize,
+    out_norm: *mut f64,
+) -> i32 {
+    if vec_ptr.is_null() || dim == 0 || out_norm.is_null() {
+        return PMTP_ERR_NULLPTR;
+    }
+    let _simd = ScopedSimdRust::new();
+
+    let mut sum = [0.0f64; 4];
+    let mut c = [0.0f64; 4];
+    let mut i = 0usize;
+
+    while i + 3 < dim {
+        for k in 0..4 {
+            let v = *vec_ptr.add(i + k) as f64;
+            let y = (v * v) - c[k];
+            let tt = sum[k] + y;
+            c[k] = (tt - sum[k]) - y;
+            sum[k] = tt;
+        }
+        i += 4;
+    }
+    while i < dim {
+        let v = *vec_ptr.add(i) as f64;
+        let y = (v * v) - c[0];
+        let tt = sum[0] + y;
+        c[0] = (tt - sum[0]) - y;
+        sum[0] = tt;
+        i += 1;
+    }
+
+    let total = sum[0] + sum[1] + sum[2] + sum[3];
+    if !total.is_finite() {
+        return PMTP_ERR_NONFINITE;
+    }
+
+    let norm = total.sqrt();
+    if !norm.is_finite() {
+        return PMTP_ERR_NONFINITE;
+    }
+    if norm < EPSILON_FP64 {
+        return PMTP_ERR_COLLAPSE;
+    }
+
+    let inv_norm = 1.0 / norm;
+    for j in 0..dim {
+        *vec_ptr.add(j) = ((*vec_ptr.add(j) as f64) * inv_norm) as f32;
+    }
+
+    *out_norm = norm;
+    PMTP_OK
+}
+
+// ── Geodesic Distance (unit vectors required) ────────────────────────────────
+#[no_mangle]
+pub unsafe extern "C" fn rust_geodesic_distance(
+    u_ptr: *const f32,
+    v_ptr: *const f32,
+    dim: usize,
+    out_dist: *mut f64,
+) -> i32 {
+    if u_ptr.is_null() || v_ptr.is_null() || out_dist.is_null() || dim == 0 {
+        return PMTP_ERR_NULLPTR;
+    }
+
+    let dot = rust_dot_product(u_ptr, v_ptr, dim);
+    if dot.is_nan() {
+        return PMTP_ERR_NONFINITE;
+    }
+
+    let clamped = dot.clamp(-1.0, 1.0);
+    let cross_sq = (1.0 - clamped * clamped).max(0.0);
+    *out_dist = cross_sq.sqrt().atan2(clamped);
+    PMTP_OK
+}
+
+// ── Riemannian Exp Map (raw pointers, transactional) ─────────────────────────
+#[no_mangle]
+pub unsafe extern "C" fn rust_exp_map(
+    s_ptr: *const f32,
+    w_ptr: *const f32,
+    s_next_ptr: *mut f32,
+    v_tangent_ptr: *mut f32,
+    dim: usize,
+    dt: f32,
+) -> i32 {
+    if s_ptr.is_null() || w_ptr.is_null() || s_next_ptr.is_null()
+        || v_tangent_ptr.is_null() || dim == 0
+    {
+        return PMTP_ERR_NULLPTR;
+    }
+    if !dt.is_finite() || dt < 0.0 {
+        return PMTP_ERR_BAD_ARG;
+    }
+    let _simd = ScopedSimdRust::new();
+
+    let dot_ws = rust_dot_product(s_ptr, w_ptr, dim);
+    if dot_ws.is_nan() {
+        return PMTP_ERR_NONFINITE;
+    }
+
+    let dot_ws_f = dot_ws as f32;
+    let mut v_norm_sq: f64 = 0.0;
+    let mut c: f64 = 0.0;
+
+    for i in 0..dim {
+        let vt = *w_ptr.add(i) - dot_ws_f * (*s_ptr.add(i));
+        *v_tangent_ptr.add(i) = vt;
+        let vd = vt as f64;
+        let y = (vd * vd) - c;
+        let tt = v_norm_sq + y;
+        c = (tt - v_norm_sq) - y;
+        v_norm_sq = tt;
+    }
+
+    let v_norm_d = v_norm_sq.sqrt();
+    let v_norm = v_norm_d as f32;
+
+    if v_norm < EPSILON_FP32 {
+        if !std::ptr::eq(s_ptr, s_next_ptr) {
+            std::ptr::copy_nonoverlapping(s_ptr, s_next_ptr, dim);
+        }
+        return PMTP_OK;
+    }
+
+    let theta = (v_norm * dt).rem_euclid(TWO_PI as f32);
+    let cos_t = theta.cos();
+    let scale_v = if theta < THETA_SMALL {
+        let t2 = theta * theta;
+        (1.0 - t2 / 6.0 + (t2 * t2) / 120.0) * dt
+    } else {
+        theta.sin() / v_norm
+    };
+
+    // Transactional write
+    for i in 0..dim {
+        *s_next_ptr.add(i) = cos_t * (*s_ptr.add(i)) + scale_v * (*v_tangent_ptr.add(i));
+    }
+
+    let mut norm_out: f64 = 0.0;
+    let rc = rust_normalize_s_d(s_next_ptr, dim, &mut norm_out);
+    if rc != PMTP_OK {
+        // Rollback
+        if !std::ptr::eq(s_ptr, s_next_ptr) {
+            std::ptr::copy_nonoverlapping(s_ptr, s_next_ptr, dim);
+        }
+        return rc;
+    }
+    PMTP_OK
+}
+
+// ── Cayley-SMW Rational Step (ZERO trigonometry) ─────────────────────────────
+#[no_mangle]
+pub unsafe extern "C" fn rust_cayley_step(
+    s_ptr: *const f32,
+    w_ptr: *const f32,
+    s_next_ptr: *mut f32,
+    v_tangent_ptr: *mut f32,
+    dim: usize,
+    dt: f32,
+) -> i32 {
+    if s_ptr.is_null() || w_ptr.is_null() || s_next_ptr.is_null()
+        || v_tangent_ptr.is_null() || dim == 0
+    {
+        return PMTP_ERR_NULLPTR;
+    }
+    if !dt.is_finite() || dt < 0.0 {
+        return PMTP_ERR_BAD_ARG;
+    }
+    let _simd = ScopedSimdRust::new();
+
+    let dot_ws = rust_dot_product(s_ptr, w_ptr, dim);
+    if dot_ws.is_nan() {
+        return PMTP_ERR_NONFINITE;
+    }
+
+    let dot_ws_f = dot_ws as f32;
+    let mut v_norm_sq: f64 = 0.0;
+    let mut c: f64 = 0.0;
+
+    for i in 0..dim {
+        let vt = *w_ptr.add(i) - dot_ws_f * (*s_ptr.add(i));
+        *v_tangent_ptr.add(i) = vt;
+        let vd = vt as f64;
+        let y = (vd * vd) - c;
+        let tt = v_norm_sq + y;
+        c = (tt - v_norm_sq) - y;
+        v_norm_sq = tt;
+    }
+
+    let v_norm_d = v_norm_sq.sqrt();
+    let v_norm = v_norm_d as f32;
+
+    if v_norm < EPSILON_FP32 {
+        if !std::ptr::eq(s_ptr, s_next_ptr) {
+            std::ptr::copy_nonoverlapping(s_ptr, s_next_ptr, dim);
+        }
+        return PMTP_OK;
+    }
+
+    // TRUE CAYLEY-SMW RATIONAL: tau = ||v_T|| * dt / 2
+    let tau: f64 = (v_norm_d * (dt as f64)) / 2.0;
+    let tau2 = tau * tau;
+    let denom = 1.0 / (1.0 + tau2);
+
+    let coeff_s = ((1.0 - tau2) * denom) as f32;
+    let coeff_v = ((2.0 * tau * denom) / v_norm_d) as f32;
+
+    // Transactional write
+    for i in 0..dim {
+        *s_next_ptr.add(i) = coeff_s * (*s_ptr.add(i)) + coeff_v * (*v_tangent_ptr.add(i));
+    }
+
+    let mut norm_out: f64 = 0.0;
+    let rc = rust_normalize_s_d(s_next_ptr, dim, &mut norm_out);
+    if rc != PMTP_OK {
+        if !std::ptr::eq(s_ptr, s_next_ptr) {
+            std::ptr::copy_nonoverlapping(s_ptr, s_next_ptr, dim);
+        }
+        return rc;
+    }
+    PMTP_OK
+}

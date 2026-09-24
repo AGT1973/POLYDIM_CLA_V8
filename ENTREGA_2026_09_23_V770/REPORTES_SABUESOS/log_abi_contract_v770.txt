@@ -1,0 +1,22 @@
+=== TEST: ABI_Contract_Gates ===
+Timestamp: 2026-09-22T21:15:27
+Exit Code: 0
+Elapsed Time: 0.645s
+============================================================
+
+================================================================================
+🏛️ POLYDIM V769 — ABI CONTRACT VERIFICATION TEST (CI GATE)
+================================================================================
+  [TEST 1] Struct Sizes & Alignments... PASSED
+  [TEST 2] PMTP Field Offsets... PASSED
+  [TEST 3] PMTP sizeof & Overflow Guard (F-010)... PASSED
+  [TEST 4] PMTP 64-byte Alignment Contract (F-008)... PASSED
+  [TEST 5] PMTP Payload Offsets & Pointers... PASSED
+  [TEST 6] NaN Tolerance Rejection (F-016)... PASSED
+  [TEST 7] Partial Overlap Rejection (F-018, F-019)... PASSED
+  [TEST 8] Hardware FTZ/DAZ Status (F-REAL-03)... PASSED (FTZ=1, POLYDIM V769 | FTZ/DAZ=ON (NO conforme IEEE-754) | BLAS=OFF (bucles nativos optimizados) | OpenMP=ON)
+  [TEST 9] Rust Betti-1 Guard ABI & Spanner... PASSED
+  [TEST 10] Stiefel Tangent & Cayley Retraction Axiom (P0-02)... PASSED (Axiom Err=1.09e-06, Ortho=4.44e-16)
+================================================================================
+✅ ALL ABI CONTRACT TESTS PASSED WITH EXIT CODE 0
+================================================================================

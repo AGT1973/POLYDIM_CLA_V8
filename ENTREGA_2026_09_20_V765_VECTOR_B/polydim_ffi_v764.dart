@@ -1,0 +1,366 @@
+// ============================================================================
+// POLYDIM V762 — puente FFI Dart
+//
+// A12 — lo que V761 hacía mal:
+//   1. `main()` abría la biblioteca, resolvía el símbolo y NUNCA lo llamaba.
+//      El "Exit Code 0" del documento de entrega certificaba únicamente que
+//      dlopen y dlsym funcionaron.
+//   2. El comentario "46 ms en D=1.000.000 con 0.00 de deriva" era un literal
+//      en el código, no una medición. Aquí el número se mide y se imprime.
+//      (Medido en este entorno con 2 hilos: mediana ~3.4 ms en D=1e6.)
+//   3. El nombre de biblioteca era `bin/polydim_kernel.so`; en Linux/Android la
+//      convención es `libpolydim.so`, y no había rama para macOS.
+//   4. No se liberaba nada: cada llamada habría filtrado 4 x D x 8 bytes.
+//   5. Sin `isLeaf`, cada llamada paga ~235 ns de sobrecarga en lugar de ~28 ns.
+//      Pero `isLeaf` bloquea el GC durante la llamada, así que NO se usa en las
+//      rutinas largas del kernel: sería exactamente el uso incorrecto.
+//      Ver https://dart.googlesource.com/native/+/HEAD/doc/performance.md
+// ============================================================================
+
+import 'dart:ffi';
+import 'dart:io' show Platform, File, Directory;
+import 'dart:math' as math;
+import 'package:ffi/ffi.dart' show calloc;
+
+// --- códigos de estado, espejo de polydim.h ---------------------------------
+const int polydimSuccess = 0;
+const Map<int, String> polydimStatus = {
+  0: 'SUCCESS',
+  -1: 'NULL_POINTER',
+  -2: 'INVALID_DIMENSION',
+  -3: 'NAN_OR_INF',
+  -4: 'DEGENERATE_NORM',
+  -5: 'NUMERICAL_INSTABILITY',
+  -6: 'SEQLOCK_RACE',
+  -7: 'BUFFER_OVERFLOW',
+  -8: 'INVALID_SCALAR',
+  -9: 'BASIS_NOT_ORTHONORMAL',
+  -10: 'POINT_OFF_MANIFOLD',
+  -11: 'ALIASED_BUFFERS',
+  -12: 'COMPENSATION_BROKEN',
+};
+
+String statusName(int rc) => polydimStatus[rc] ?? 'DESCONOCIDO($rc)';
+
+class PolydimException implements Exception {
+  final int code;
+  final String op;
+  PolydimException(this.op, this.code);
+  @override
+  String toString() => 'PolydimException: $op -> ${statusName(code)} ($code)';
+}
+
+// --- structs, espejo exacto de polydim.h ------------------------------------
+final class PolydimTolerances extends Struct {
+  @Double()
+  external double basisOrtho;
+  @Double()
+  external double pointNorm;
+  @Double()
+  external double gramOrtho;
+  @Double()
+  external double pivotRel;
+  @Int32()
+  external int rejectSubnormal;
+}
+
+final class PolydimReport extends Struct {
+  @Double()
+  external double pointNormErr;
+  @Double()
+  external double basisUuErr;
+  @Double()
+  external double basisVvErr;
+  @Double()
+  external double basisUvErr;
+  @Double()
+  external double outNormErr;
+  @Double()
+  external double pivotMin;
+  @Double()
+  external double pivotThreshold;
+  @Double()
+  external double orthoErr;
+  @Uint64()
+  external int threadsUsed;
+}
+
+// --- firmas ----------------------------------------------------------------
+typedef _RodriguesNative = Int32 Function(Pointer<Double>, Pointer<Double>,
+    Pointer<Double>, Pointer<Double>, Double, Uint64,
+    Pointer<PolydimTolerances>, Pointer<PolydimReport>);
+typedef _RodriguesDart = int Function(Pointer<Double>, Pointer<Double>,
+    Pointer<Double>, Pointer<Double>, double, int,
+    Pointer<PolydimTolerances>, Pointer<PolydimReport>);
+
+typedef _ProjectNative = Int32 Function(
+    Pointer<Double>, Pointer<Double>, Uint64, Pointer<PolydimReport>);
+typedef _ProjectDart = int Function(
+    Pointer<Double>, Pointer<Double>, int, Pointer<PolydimReport>);
+
+typedef _OrthoNative = Int32 Function(
+    Pointer<Double>, Pointer<Double>, Uint64, Pointer<PolydimReport>);
+typedef _OrthoDart = int Function(
+    Pointer<Double>, Pointer<Double>, int, Pointer<PolydimReport>);
+
+typedef _SelftestNative = Int32 Function();
+typedef _SelftestDart = int Function();
+
+typedef _InfoNative = Pointer<Uint8> Function();
+typedef _InfoDart = Pointer<Uint8> Function();
+
+// --- PMTP structs and signatures -------------------------------------------
+final class PMTPControl extends Struct {
+  @Uint8()
+  external int state;
+}
+
+typedef _InitNative = Void Function(Pointer<PMTPControl>);
+typedef _InitDart = void Function(Pointer<PMTPControl>);
+
+typedef _BeginWriteNative = Int32 Function(Pointer<PMTPControl>, Pointer<Uint64>);
+typedef _BeginWriteDart = int Function(Pointer<PMTPControl>, Pointer<Uint64>);
+
+typedef _CommitWriteNative = Int32 Function(Pointer<PMTPControl>, Uint64);
+typedef _CommitWriteDart = int Function(Pointer<PMTPControl>, int);
+
+typedef _AcquireReadNative = Int32 Function(Pointer<PMTPControl>, Pointer<Uint64>, Pointer<Uint64>, Pointer<Uint64>);
+typedef _AcquireReadDart = int Function(Pointer<PMTPControl>, Pointer<Uint64>, Pointer<Uint64>, Pointer<Uint64>);
+
+typedef _ValidateReadNative = Int32 Function(Pointer<PMTPControl>, Uint64, Uint64);
+typedef _ValidateReadDart = int Function(Pointer<PMTPControl>, int, int);
+
+/// Enlace a libpolydim. Resuelve el nombre por plataforma (A12.3).
+class Polydim {
+  final DynamicLibrary _lib;
+  late final _RodriguesDart _rodrigues;
+  late final _ProjectDart _projectSphere;
+  late final _OrthoDart _orthonormalize;
+  late final _SelftestDart _selftestAll;
+  late final _InfoDart _buildInfo;
+  late final _InitDart _initControl;
+  late final _BeginWriteDart _beginWrite;
+  late final _CommitWriteDart _commitWrite;
+  late final _AcquireReadDart _acquireRead;
+  late final _ValidateReadDart _validateRead;
+
+  Polydim._(this._lib) {
+    _rodrigues = _lib.lookupFunction<_RodriguesNative, _RodriguesDart>(
+        'polydim_rodrigues_geodesic_f64');
+    _projectSphere = _lib.lookupFunction<_ProjectNative, _ProjectDart>(
+        'polydim_project_sphere_f64');
+    _orthonormalize = _lib.lookupFunction<_OrthoNative, _OrthoDart>(
+        'polydim_orthonormalize_pair_f64');
+    _selftestAll =
+        _lib.lookupFunction<_SelftestNative, _SelftestDart>('polydim_selftest_all');
+    _buildInfo = _lib.lookupFunction<_InfoNative, _InfoDart>('polydim_build_info');
+    
+    // PMTP lookups
+    _initControl = _lib.lookupFunction<_InitNative, _InitDart>('polydim_pmtp_init');
+    _beginWrite = _lib.lookupFunction<_BeginWriteNative, _BeginWriteDart>('polydim_pmtp_begin_write');
+    _commitWrite = _lib.lookupFunction<_CommitWriteNative, _CommitWriteDart>('polydim_pmtp_commit_write');
+    _acquireRead = _lib.lookupFunction<_AcquireReadNative, _AcquireReadDart>('polydim_pmtp_acquire_read');
+    _validateRead = _lib.lookupFunction<_ValidateReadNative, _ValidateReadDart>('polydim_pmtp_validate_read');
+  }
+
+  static String _defaultLibraryName() {
+    if (Platform.isWindows) return 'polydim.dll';
+    if (Platform.isMacOS) return 'libpolydim.dylib'; // A12.3: faltaba en V761
+    return 'libpolydim.so'; // Linux y Android: prefijo `lib`, no `polydim_kernel.so`
+  }
+
+  /// Abre la biblioteca y ejecuta el autodiagnóstico.
+  ///
+  /// El autodiagnóstico NO es opcional: si el kernel se compiló con -ffast-math
+  /// la sumación compensada quedó anulada y esto lanza COMPENSATION_BROKEN antes
+  /// de que cualquier resultado incorrecto salga del proceso.
+  static Polydim open({String? path, bool runSelftest = true}) {
+    final name = path ?? _defaultLibraryName();
+    // dlopen con un nombre desnudo busca en LD_LIBRARY_PATH, NO en el directorio
+    // actual. Hay que dar rutas explicitas o la carga falla sin razon aparente.
+    final cwd = Directory.current.path;
+    final candidates = <String>[
+      name, // por si esta instalada en el sistema
+      './$name',
+      '$cwd/$name',
+      '$cwd/build/$name',
+      '$cwd/../build/$name',
+    ];
+    DynamicLibrary? lib;
+    final errors = <String>[];
+    for (final c in candidates) {
+      try {
+        lib = DynamicLibrary.open(c);
+        break;
+      } on ArgumentError catch (e) {
+        errors.add('$c: $e');
+      }
+    }
+    if (lib == null) {
+      throw StateError('No se pudo abrir $name.\n${errors.join('\n')}');
+    }
+    final p = Polydim._(lib);
+    if (runSelftest) {
+      final rc = p._selftestAll();
+      if (rc != polydimSuccess) throw PolydimException('selftest_all', rc);
+    }
+    return p;
+  }
+
+  String get buildInfo {
+    final ptr = _buildInfo();
+    final bytes = <int>[];
+    for (var i = 0; ptr[i] != 0; i++) {
+      bytes.add(ptr[i]);
+    }
+    return String.fromCharCodes(bytes);
+  }
+
+  /// Ejecuta una rotación y devuelve (código, copia del reporte).
+  /// La memoria nativa se libera siempre, incluso si el kernel falla (A12.4).
+  ({int rc, double outNormErr, double pointNormErr, int threads, List<double>? y})
+      rotate({
+    required List<double> y,
+    required List<double> u,
+    required List<double> v,
+    required double theta,
+    bool returnResult = true,
+  }) {
+    final d = y.length;
+    if (u.length != d || v.length != d) {
+      throw ArgumentError('y, u y v deben tener la misma longitud');
+    }
+    final py = calloc<Double>(d);
+    final pu = calloc<Double>(d);
+    final pv = calloc<Double>(d);
+    final po = calloc<Double>(d);
+    final rep = calloc<PolydimReport>();
+    try {
+      for (var i = 0; i < d; i++) {
+        py[i] = y[i];
+        pu[i] = u[i];
+        pv[i] = v[i];
+      }
+      final rc = _rodrigues(py, pu, pv, po, theta, d, nullptr, rep);
+      final r = rep.ref;
+      List<double>? out;
+      if (rc == polydimSuccess && returnResult) {
+        out = List<double>.generate(d, (i) => po[i], growable: false);
+      }
+      return (
+        rc: rc,
+        outNormErr: r.outNormErr,
+        pointNormErr: r.pointNormErr,
+        threads: r.threadsUsed,
+        y: out
+      );
+    } finally {
+      // A12.4: V764 no liberaba nada. Esto corre incluso si el kernel lanza.
+      calloc.free(py);
+      calloc.free(pu);
+      calloc.free(pv);
+      calloc.free(po);
+      calloc.free(rep);
+    }
+  }
+
+  void pmtpInit(Pointer<PMTPControl> ctrl) {
+    _initControl(ctrl);
+  }
+
+  int pmtpBeginWrite(Pointer<PMTPControl> ctrl, Pointer<Uint64> slotOut) {
+    return _beginWrite(ctrl, slotOut);
+  }
+
+  int pmtpCommitWrite(Pointer<PMTPControl> ctrl, int slot) {
+    return _commitWrite(ctrl, slot);
+  }
+
+  int pmtpAcquireRead(Pointer<PMTPControl> ctrl, Pointer<Uint64> observedSeq, Pointer<Uint64> slotOut, Pointer<Uint64> ticketOut) {
+    return _acquireRead(ctrl, observedSeq, slotOut, ticketOut);
+  }
+
+  int pmtpValidateRead(Pointer<PMTPControl> ctrl, int slot, int ticket) {
+    return _validateRead(ctrl, slot, ticket);
+  }
+
+  void publishWrite(Pointer<PMTPControl> ctrl, int bufferIndex, int nextSeq, int timestampNs, int pid) {
+    _publishWrite(ctrl, bufferIndex, nextSeq, timestampNs, pid);
+  }
+
+  bool acquireRead(Pointer<PMTPControl> ctrl, Pointer<Uint64> observedSeq, Pointer<Uint64> safeBuffer) {
+    return _acquireRead(ctrl, observedSeq, safeBuffer);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Demostración: mide de verdad en lugar de afirmar un número en un comentario.
+// ---------------------------------------------------------------------------
+void main(List<String> args) {
+  final poly = Polydim.open();
+  print('Biblioteca abierta: ${poly.buildInfo}');
+  print('Autodiagnostico: OK (si no, open() habria lanzado)');
+
+  const d = 1000000;
+  final rnd = math.Random(20260920);
+
+  // Base ortonormal construida con la rutina COMPENSADA del kernel.
+  final pu = calloc<Double>(d);
+  final pv = calloc<Double>(d);
+  final py = calloc<Double>(d);
+  final pyn = calloc<Double>(d);
+  final po = calloc<Double>(d);
+  final rep = calloc<PolydimReport>();
+  try {
+    for (var i = 0; i < d; i++) {
+      pu[i] = rnd.nextDouble() * 2 - 1;
+      pv[i] = rnd.nextDouble() * 2 - 1;
+    }
+    var rc = poly._orthonormalize(pu, pv, d, rep);
+    if (rc != polydimSuccess) throw PolydimException('orthonormalize', rc);
+    print('Base ortonormal: |<u,v>|=${rep.ref.basisUvErr.toStringAsExponential(3)}');
+
+    for (var i = 0; i < d; i++) {
+      py[i] = 0.6 * pu[i] + 0.3 * pv[i] + 0.1 * (rnd.nextDouble() * 2 - 1);
+    }
+    rc = poly._projectSphere(py, pyn, d, rep);
+    if (rc != polydimSuccess) throw PolydimException('project_sphere', rc);
+
+    // Calentamiento + medición real. Sin isLeaf: la llamada es larga y debe
+    // permitir que el GC corra.
+    poly._rodrigues(pyn, pu, pv, po, 0.7, d, nullptr, rep);
+    final times = <double>[];
+    for (var i = 0; i < 9; i++) {
+      final sw = Stopwatch()..start();
+      rc = poly._rodrigues(pyn, pu, pv, po, 0.7, d, nullptr, rep);
+      sw.stop();
+      if (rc != polydimSuccess) throw PolydimException('rodrigues', rc);
+      times.add(sw.elapsedMicroseconds / 1000.0);
+    }
+    times.sort();
+    print('D=$d  mediana=${times[times.length ~/ 2].toStringAsFixed(2)} ms  '
+        'min=${times.first.toStringAsFixed(2)} ms  '
+        'deriva=${rep.ref.outNormErr.toStringAsExponential(3)}  '
+        'hilos=${rep.ref.threadsUsed}');
+
+    // Y ahora la parte que V761 no podía hacer: comprobar que los errores
+    // llegan al llamante en vez de devolver SUCCESS con NaN.
+    for (final caso in [
+      ('theta=NaN', double.nan, -8),
+      ('theta=Inf', double.infinity, -8),
+    ]) {
+      rc = poly._rodrigues(pyn, pu, pv, po, caso.$2, d, nullptr, rep);
+      final ok = rc == caso.$3 ? 'OK' : 'FALLA';
+      print('[$ok] ${caso.$1} -> ${statusName(rc)} (esperado ${statusName(caso.$3)})');
+    }
+    // Base rota: debe rechazarse.
+    pu[0] = pu[0] * 2 + 1.0;
+    rc = poly._rodrigues(pyn, pu, pv, po, 0.7, d, nullptr, rep);
+    print('[${rc == -9 ? 'OK' : 'FALLA'}] base rota -> ${statusName(rc)}');
+  } finally {
+    for (final p in [pu, pv, py, pyn, po]) {
+      calloc.free(p);
+    }
+    calloc.free(rep);
+  }
+}

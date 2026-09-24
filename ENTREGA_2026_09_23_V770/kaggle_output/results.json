@@ -1,0 +1,57 @@
+{
+  "device": "cpu",
+  "gpu_name": "CPU",
+  "gpu_count": 0,
+  "benchmarks": [
+    {
+      "name": "Rodrigues_GPU_FP64",
+      "D": 10000,
+      "latency_ms": 0.5890999746043235,
+      "norm_drift": 4.440892098500626e-16,
+      "bandwidth_gbs": 0.543201517221134
+    },
+    {
+      "name": "Rodrigues_GPU_FP64",
+      "D": 100000,
+      "latency_ms": 3.007799998158589,
+      "norm_drift": 1.9984014443252818e-15,
+      "bandwidth_gbs": 1.063900525952217
+    },
+    {
+      "name": "Rodrigues_GPU_FP64",
+      "D": 1000000,
+      "latency_ms": 67.28210000437684,
+      "norm_drift": 4.3298697960381105e-15,
+      "bandwidth_gbs": 0.4756094116848067
+    },
+    {
+      "name": "Rodrigues_GPU_FP64",
+      "D": 10000000,
+      "latency_ms": 1826.9696999923326,
+      "norm_drift": 4.440892098500626e-16,
+      "bandwidth_gbs": 0.17515342482217575
+    },
+    {
+      "name": "CholQR2_GPU_FP64",
+      "D": 65536,
+      "K": 16,
+      "latency_ms": 102.99739998299628,
+      "ortho_error": 1.1102230246251565e-15
+    },
+    {
+      "name": "CholQR2_GPU_FP64",
+      "D": 65536,
+      "K": 32,
+      "latency_ms": 330.5951000074856,
+      "ortho_error": 1.1102230246251565e-15
+    },
+    {
+      "name": "CholQR2_GPU_FP64",
+      "D": 65536,
+      "K": 64,
+      "latency_ms": 561.4383000065573,
+      "ortho_error": 2.220446049250313e-15
+    }
+  ],
+  "subnormal_val": 1.0005271035279194e-42
+}

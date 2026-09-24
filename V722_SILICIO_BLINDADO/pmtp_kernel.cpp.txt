@@ -1,0 +1,406 @@
+// ============================================================================
+// POLYDIM LATENTOS V722 SILICON — NATIVE C++ KERNEL (INDUSTRIAL GRADE)
+// ============================================================================
+// Contratos: S^(D-1) Geometry, Cayley-SMW Rational, Zero-Trust, NUMA Isolation
+// Auditoría: 6-IA Red Team + Bulldog Consolidado (2026-09-14)
+// ============================================================================
+
+#include <cmath>
+#include <cstdint>
+#include <cstddef>
+#include <cstring>
+#include <atomic>
+#include <cfloat>
+
+#if defined(_MSC_VER)
+  #include <intrin.h>
+  #define PMTP_EXPORT __declspec(dllexport)
+  #define RESTRICT    __restrict
+#else
+  #include <x86intrin.h>
+  #define PMTP_EXPORT __attribute__((visibility("default")))
+  #define RESTRICT    __restrict__
+#endif
+
+// ── Constants ────────────────────────────────────────────────────────────────
+constexpr float  EPSILON_FP32   = 1e-7f;
+constexpr double EPSILON_FP64   = 1e-14;
+constexpr double TWO_PI         = 6.283185307179586;
+constexpr float  THETA_SMALL    = 1e-4f;
+
+// ── Status Codes (unified cross-backend) ─────────────────────────────────────
+enum pmtp_status_t : int32_t {
+    PMTP_OK            =  0,
+    PMTP_ERR_NONFINITE = -1,   // NaN or Inf detected
+    PMTP_ERR_COLLAPSE  = -2,   // norm < epsilon (degenerate)
+    PMTP_ERR_TIMEOUT   = -3,
+    PMTP_ERR_NULLPTR   = -4,
+    PMTP_ERR_BAD_ARG   = -5,   // dt invalid, dim==0, etc.
+    PMTP_ERR_ALIASING  = -6,   // forbidden pointer overlap
+};
+
+// ── FFI Structures (64B cache-line isolated) ─────────────────────────────────
+struct alignas(64) PmtpHeader {
+    uint64_t magic;       // 0x504D54505F563732 ("PMTP_V72")
+    uint32_t abi_version; // 722
+    uint32_t flags;
+    uint32_t dim;
+    uint32_t precision;   // 32 = FP32
+    uint64_t timestamp;
+    uint64_t sequence;    // monotonic for lockless snapshots
+    uint8_t  _pad[16];
+};
+static_assert(sizeof(PmtpHeader)  == 64, "PmtpHeader must be 64B");
+static_assert(alignof(PmtpHeader) == 64, "PmtpHeader must align 64B");
+
+// ABI offset assertions (cross-language contract)
+static_assert(offsetof(PmtpHeader, magic)       ==  0, "");
+static_assert(offsetof(PmtpHeader, abi_version)  ==  8, "");
+static_assert(offsetof(PmtpHeader, flags)        == 12, "");
+static_assert(offsetof(PmtpHeader, dim)          == 16, "");
+static_assert(offsetof(PmtpHeader, precision)    == 20, "");
+static_assert(offsetof(PmtpHeader, timestamp)    == 24, "");
+static_assert(offsetof(PmtpHeader, sequence)     == 32, "");
+
+// Unified atomic ownership: high bit = LOCKED, low 63 bits = owner_id
+struct alignas(64) PmtpControl {
+    std::atomic<uint64_t> state;  // LOCKED|owner packed
+    uint32_t error_code;
+    uint32_t _reserved;
+    uint8_t  _pad[48];
+};
+static_assert(sizeof(PmtpControl)  == 64, "PmtpControl must be 64B");
+static_assert(std::atomic<uint64_t>::is_always_lock_free,
+              "PMTP requires lock-free uint64 atomics");
+
+static constexpr uint64_t LOCK_BIT = 1ULL << 63;
+
+// ── SIMD FTZ/DAZ RAII Guard ──────────────────────────────────────────────────
+class ScopedSIMDMode {
+    unsigned int old_csr_;
+public:
+    ScopedSIMDMode() : old_csr_(0) {
+#if defined(__x86_64__) || defined(_M_X64)
+        old_csr_ = _mm_getcsr();
+        _mm_setcsr((old_csr_ | 0x8040) & ~0x3Fu); // FTZ+DAZ on, mask exceptions
+#endif
+    }
+    ~ScopedSIMDMode() {
+#if defined(__x86_64__) || defined(_M_X64)
+        _mm_setcsr(old_csr_);
+#endif
+    }
+};
+
+// ── Core: 4-Way Pipelined Kahan Dot Product (ZERO branching inside loop) ─────
+extern "C" {
+
+PMTP_EXPORT
+double safe_dot_product(
+    const float* RESTRICT a_ptr,
+    const float* RESTRICT b_ptr,
+    size_t dim
+) {
+    if (!a_ptr || !b_ptr || dim == 0) return 0.0;
+    ScopedSIMDMode guard;
+
+    double sum[4] = {0,0,0,0};
+    double c[4]   = {0,0,0,0};
+
+    // ZERO BRANCHING: let NaN propagate via IEEE-754 contagion
+    size_t i = 0;
+    for (; i + 3 < dim; i += 4) {
+        for (int k = 0; k < 4; ++k) {
+            double y  = (static_cast<double>(a_ptr[i+k]) *
+                         static_cast<double>(b_ptr[i+k])) - c[k];
+            double tt = sum[k] + y;
+            c[k]      = (tt - sum[k]) - y;
+            sum[k]    = tt;
+        }
+    }
+    for (; i < dim; ++i) {
+        double y  = (static_cast<double>(a_ptr[i]) *
+                     static_cast<double>(b_ptr[i])) - c[0];
+        double tt = sum[0] + y;
+        c[0]      = (tt - sum[0]) - y;
+        sum[0]    = tt;
+    }
+
+    double result = sum[0] + sum[1] + sum[2] + sum[3];
+    // Post-loop contagion check (single branch, after full SIMD pass)
+    if (!std::isfinite(result)) return NAN;
+    return result;
+}
+
+// ── Normalize: FP64 throughout, NEVER casts norm to float ────────────────────
+PMTP_EXPORT
+int32_t normalize_s_d(
+    float* RESTRICT vec,
+    size_t dim,
+    double* RESTRICT out_norm   // caller receives the FP64 norm
+) {
+    if (!vec || dim == 0 || !out_norm) return PMTP_ERR_NULLPTR;
+    ScopedSIMDMode guard;
+
+    double sum[4] = {0,0,0,0};
+    double c[4]   = {0,0,0,0};
+
+    size_t i = 0;
+    for (; i + 3 < dim; i += 4) {
+        for (int k = 0; k < 4; ++k) {
+            double v = static_cast<double>(vec[i+k]);
+            double y  = (v * v) - c[k];
+            double tt = sum[k] + y;
+            c[k]      = (tt - sum[k]) - y;
+            sum[k]    = tt;
+        }
+    }
+    for (; i < dim; ++i) {
+        double v = static_cast<double>(vec[i]);
+        double y  = (v * v) - c[0];
+        double tt = sum[0] + y;
+        c[0]      = (tt - sum[0]) - y;
+        sum[0]    = tt;
+    }
+
+    double total = sum[0] + sum[1] + sum[2] + sum[3];
+    if (!std::isfinite(total))      return PMTP_ERR_NONFINITE;
+
+    double norm = std::sqrt(total);
+    if (!std::isfinite(norm))       return PMTP_ERR_NONFINITE;
+    if (norm < EPSILON_FP64)        return PMTP_ERR_COLLAPSE;
+
+    // Division in FP64, store result in FP32
+    double inv_norm = 1.0 / norm;
+    for (size_t j = 0; j < dim; ++j) {
+        vec[j] = static_cast<float>(static_cast<double>(vec[j]) * inv_norm);
+    }
+
+    *out_norm = norm;
+    return PMTP_OK;
+}
+
+// ── Geodesic distance (PRECONDITION: u,v MUST be unit vectors) ───────────────
+PMTP_EXPORT
+int32_t safe_geodesic_distance(
+    const float* RESTRICT u,
+    const float* RESTRICT v,
+    size_t dim,
+    double* RESTRICT out_dist
+) {
+    if (!u || !v || !out_dist || dim == 0) return PMTP_ERR_NULLPTR;
+
+    double dot = safe_dot_product(u, v, dim);
+    if (std::isnan(dot)) return PMTP_ERR_NONFINITE;
+
+    double clamped = dot < -1.0 ? -1.0 : (dot > 1.0 ? 1.0 : dot);
+    double cross_sq = 1.0 - clamped * clamped;
+    if (cross_sq < 0.0) cross_sq = 0.0;
+    *out_dist = std::atan2(std::sqrt(cross_sq), clamped);
+    return PMTP_OK;
+}
+
+// ── Riemannian Exp Map (TRANSACTIONAL: writes S_next only on success) ────────
+// Signature: S_t, velocity, S_next, v_tangent_buf (all caller-owned), dim, dt
+PMTP_EXPORT
+int32_t riemannian_exp_map(
+    const float* RESTRICT S_t,
+    const float* RESTRICT velocity,
+    float* RESTRICT       S_next,
+    float* RESTRICT       v_tangent_buf,  // scratch, dim floats, caller-owned
+    size_t dim,
+    float  dt
+) {
+    if (!S_t || !velocity || !S_next || !v_tangent_buf || dim == 0)
+        return PMTP_ERR_NULLPTR;
+    if (!std::isfinite(dt) || dt < 0.0f)
+        return PMTP_ERR_BAD_ARG;
+
+    ScopedSIMDMode guard;
+
+    double dot_sv = safe_dot_product(S_t, velocity, dim);
+    if (std::isnan(dot_sv)) return PMTP_ERR_NONFINITE;
+
+    // Tangent projection: v_T = velocity - <S,v>*S  (FP32 storage, FP64 dot)
+    double v_norm_sq = 0.0;
+    double c = 0.0;
+    float dot_sv_f = static_cast<float>(dot_sv);
+
+    for (size_t i = 0; i < dim; ++i) {
+        float vt = velocity[i] - dot_sv_f * S_t[i];
+        v_tangent_buf[i] = vt;
+        double vd = static_cast<double>(vt);
+        double y  = (vd * vd) - c;
+        double tt = v_norm_sq + y;
+        c = (tt - v_norm_sq) - y;
+        v_norm_sq = tt;
+    }
+
+    double v_norm_d = std::sqrt(v_norm_sq);
+    float  v_norm   = static_cast<float>(v_norm_d);
+
+    if (v_norm < EPSILON_FP32) {
+        // Zero velocity: copy S_t to S_next unchanged
+        if (S_t != S_next) std::memcpy(S_next, S_t, dim * sizeof(float));
+        return PMTP_OK;
+    }
+
+    float theta = std::fmod(v_norm * dt, static_cast<float>(TWO_PI));
+    float cos_t = std::cos(theta);
+    float scale_v;
+
+    if (theta < THETA_SMALL) {
+        // Sinc Taylor: sin(theta)/theta ≈ 1 - theta²/6 + theta⁴/120
+        float t2 = theta * theta;
+        scale_v = (1.0f - t2 / 6.0f + (t2 * t2) / 120.0f) * dt;
+    } else {
+        scale_v = std::sin(theta) / v_norm;
+    }
+
+    // TRANSACTIONAL: compute into S_next, then validate
+    for (size_t i = 0; i < dim; ++i) {
+        S_next[i] = cos_t * S_t[i] + scale_v * v_tangent_buf[i];
+    }
+
+    // Validate before committing (normalize in-place on S_next)
+    double norm_out;
+    int32_t rc = normalize_s_d(S_next, dim, &norm_out);
+    if (rc != PMTP_OK) {
+        // ROLLBACK: restore S_next to S_t so caller never sees garbage
+        if (S_t != S_next) std::memcpy(S_next, S_t, dim * sizeof(float));
+        return rc;
+    }
+    return PMTP_OK;
+}
+
+// ── Cayley-SMW Rational Step (ZERO trigonometry) ─────────────────────────────
+// S_{t+1} = ((1 - tau²)/(1 + tau²)) S_t + (2*tau/(1 + tau²)) v_hat
+// where tau = (||v_T|| * dt) / 2, v_hat = v_T / ||v_T||
+// This is the TRUE Cayley transform: pure rational, no sin/cos/sqrt wasted.
+PMTP_EXPORT
+int32_t cayley_step(
+    const float* RESTRICT S_t,
+    const float* RESTRICT velocity,
+    float* RESTRICT       S_next,
+    float* RESTRICT       v_tangent_buf,
+    size_t dim,
+    float  dt
+) {
+    if (!S_t || !velocity || !S_next || !v_tangent_buf || dim == 0)
+        return PMTP_ERR_NULLPTR;
+    if (!std::isfinite(dt) || dt < 0.0f)
+        return PMTP_ERR_BAD_ARG;
+
+    ScopedSIMDMode guard;
+
+    double dot_sv = safe_dot_product(S_t, velocity, dim);
+    if (std::isnan(dot_sv)) return PMTP_ERR_NONFINITE;
+
+    // Tangent projection
+    double v_norm_sq = 0.0;
+    double c = 0.0;
+    float dot_sv_f = static_cast<float>(dot_sv);
+
+    for (size_t i = 0; i < dim; ++i) {
+        float vt = velocity[i] - dot_sv_f * S_t[i];
+        v_tangent_buf[i] = vt;
+        double vd = static_cast<double>(vt);
+        double y  = (vd * vd) - c;
+        double tt = v_norm_sq + y;
+        c = (tt - v_norm_sq) - y;
+        v_norm_sq = tt;
+    }
+
+    double v_norm_d = std::sqrt(v_norm_sq);
+    float  v_norm   = static_cast<float>(v_norm_d);
+
+    if (v_norm < EPSILON_FP32) {
+        if (S_t != S_next) std::memcpy(S_next, S_t, dim * sizeof(float));
+        return PMTP_OK;
+    }
+
+    // ── TRUE CAYLEY-SMW RATIONAL ──
+    // tau = ||v_T|| * dt / 2
+    double tau   = (v_norm_d * static_cast<double>(dt)) / 2.0;
+    double tau2  = tau * tau;
+    double denom = 1.0 / (1.0 + tau2);
+
+    // Coefficients: pure rational, ZERO trig
+    double coeff_s = (1.0 - tau2) * denom;       // replaces cos(theta)
+    double coeff_v = (2.0 * tau)  * denom;        // replaces sin(theta)/||v||
+    float  coeff_s_f = static_cast<float>(coeff_s);
+    float  coeff_v_f = static_cast<float>(coeff_v / v_norm_d); // includes 1/||v||
+
+    // TRANSACTIONAL write
+    for (size_t i = 0; i < dim; ++i) {
+        S_next[i] = coeff_s_f * S_t[i] + coeff_v_f * v_tangent_buf[i];
+    }
+
+    double norm_out;
+    int32_t rc = normalize_s_d(S_next, dim, &norm_out);
+    if (rc != PMTP_OK) {
+        if (S_t != S_next) std::memcpy(S_next, S_t, dim * sizeof(float));
+        return rc;
+    }
+    return PMTP_OK;
+}
+
+// ── Spinlock: TTAS + Exponential Backoff + Unified Atomic Ownership ──────────
+PMTP_EXPORT
+int32_t acquire_spinlock(PmtpControl* ctrl, uint64_t owner_id) {
+    if (!ctrl)          return PMTP_ERR_NULLPTR;
+    if (owner_id == 0)  return PMTP_ERR_BAD_ARG;  // 0 is sentinel "unlocked"
+
+    const uint64_t locked_owner = LOCK_BIT | (owner_id & ~LOCK_BIT);
+    unsigned spins = 0;
+
+    for (;;) {
+        // TEST phase: read without writing (stays in L1 Shared state)
+        while (ctrl->state.load(std::memory_order_relaxed) != 0) {
+#if defined(_MSC_VER)
+            _mm_pause();
+#else
+            __builtin_ia32_pause();
+#endif
+            ++spins;
+            // Exponential backoff: after 64 spins, do multi-pause bursts
+            if (spins > 64 && spins < 512) {
+                for (unsigned b = 0; b < (spins >> 4); ++b) {
+#if defined(_MSC_VER)
+                    _mm_pause();
+#else
+                    __builtin_ia32_pause();
+#endif
+                }
+            }
+        }
+
+        // TEST-AND-SET phase: attempt CAS only after line appears free
+        uint64_t expected = 0;
+        if (ctrl->state.compare_exchange_weak(
+                expected, locked_owner,
+                std::memory_order_acquire,
+                std::memory_order_relaxed))
+        {
+            return PMTP_OK;
+        }
+        // CAS failed: another thread grabbed it, loop back to TEST phase
+    }
+}
+
+PMTP_EXPORT
+int32_t release_spinlock(PmtpControl* ctrl, uint64_t owner_id) {
+    if (!ctrl) return PMTP_ERR_NULLPTR;
+
+    uint64_t expected = LOCK_BIT | (owner_id & ~LOCK_BIT);
+    if (ctrl->state.compare_exchange_strong(
+            expected, 0,
+            std::memory_order_release,
+            std::memory_order_relaxed))
+    {
+        return PMTP_OK;
+    }
+    return PMTP_ERR_BAD_ARG;  // caller doesn't own the lock
+}
+
+} // extern "C"

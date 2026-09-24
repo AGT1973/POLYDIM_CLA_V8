@@ -1,0 +1,34 @@
+# ==========================================
+# POLYDIM PUBLIC REPO IGNORES (Ariel's Law)
+# ==========================================
+# Backups y temporales pesados
+_HISTORICO/
+REPROCESO/
+matrix_state/
+eval_logs/
+models/
+.cache/
+
+# Compilados y binarios
+__pycache__/
+*.obj
+*.dll
+*.exe
+*.pdb
+*.lib
+*.exp
+*.so
+*.a
+*.o
+target/
+build_cpp_kernel/target/
+bin/
+
+# Logs y scratch de prueba
+*.log
+.cron_log.txt
+scratch/
+scratch_*.py
+*.mp4
+*.pptx
+

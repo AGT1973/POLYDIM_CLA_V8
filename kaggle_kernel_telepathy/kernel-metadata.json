@@ -1,0 +1,11 @@
+{
+  "id": "agt1973gmailcom/polydim-v765-telepathy-1790013588",
+  "title": "POLYDIM Phi Qwen Telepathy 1790013588",
+  "code_file": "benchmark.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true"
+}

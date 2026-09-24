@@ -1,0 +1,11 @@
+{
+  "id": "tradingnewtech/polydim-v765-tpu-benchmark",
+  "title": "POLYDIM V765 TPU Benchmark",
+  "code_file": "benchmark.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "false",
+  "enable_tpu": "true",
+  "enable_internet": "true"
+}

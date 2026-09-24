@@ -1,0 +1,27 @@
+=== TEST: Hardware_Probe_Benchmark ===
+Timestamp: 2026-09-22T21:15:58
+Exit Code: 0
+Elapsed Time: 21.089s
+============================================================
+
+==============================================================================
+POLYDIM V765 — KAGGLE GPU BENCHMARK (NVIDIA TESLA T4 FP64 & FP32)
+==============================================================================
+Device: cpu | GPU: CPU (Count: 0)
+
+[BENCHMARK 1] Rodrigues Geodesic on S^(D-1) (FP64 GPU Tensor)
+  -> D =     10,000: Latency =    0.589 ms | Drift = 4.441e-16 | Bandwidth =   0.54 GB/s
+  -> D =    100,000: Latency =    3.008 ms | Drift = 1.998e-15 | Bandwidth =   1.06 GB/s
+  -> D =  1,000,000: Latency =   67.282 ms | Drift = 4.330e-15 | Bandwidth =   0.48 GB/s
+  -> D = 10,000,000: Latency = 1826.970 ms | Drift = 4.441e-16 | Bandwidth =   0.18 GB/s
+
+[BENCHMARK 2] CholQR2 Tiling on GPU (D=65536, K=32 & K=64)
+  -> D = 65,536, K = 16: Latency =  102.997 ms | Ortho Error = 1.110e-15
+  -> D = 65,536, K = 32: Latency =  330.595 ms | Ortho Error = 1.110e-15
+  -> D = 65,536, K = 64: Latency =  561.438 ms | Ortho Error = 2.220e-15
+
+[BENCHMARK 3] GPU Subnormal Float Preservation (IEEE-754 FTZ Canary)
+  -> Subnormal (1e-20 * 1e-22) = 1.000527e-42
+  -> PASS: GPU preserves IEEE-754 subnormals.
+
+[OK] Results saved to kaggle_output/results.json (Exit Code 0)

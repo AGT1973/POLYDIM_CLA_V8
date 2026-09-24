@@ -1,0 +1,61 @@
+import 'dart:ffi';
+import 'package:ffi/ffi.dart';
+import 'polydim_ffi.dart';
+
+void main() {
+  print("=== SABUESO RED TEAM: DART FFI PMTP TRIPLE BUFFER ===");
+  final p = Polydim.open(path: r'..\polydim_kernel.dll');
+  
+  const numSlots = 4;
+  const payloadBytes = 8000;
+  final totalBytes = p.pmtpSizeof(numSlots, payloadBytes);
+  if (totalBytes == 0) throw Exception("pmtpSizeof failed");
+
+  // Alocar búfer con espacio para alineación estricta de 64 bytes
+  final rawMemory = calloc<Uint8>(totalBytes + 64);
+  final rawAddr = rawMemory.address;
+  final alignedAddr = (rawAddr + 63) & ~63;
+  final ctrl = Pointer<PMTPControl>.fromAddress(alignedAddr);
+  
+  print("Inicializando PMTP con $numSlots slots y $payloadBytes bytes de payload (Total: $totalBytes bytes)...");
+  int rcInit = p.pmtpInit(ctrl, numSlots, payloadBytes);
+  if (rcInit != 0) throw Exception("pmtpInit failed with rc=$rcInit");
+  
+  print("Escribiendo TENSOR_READY (Simulado)...");
+  final slotOut = calloc<Uint32>();
+  final verOut = calloc<Uint64>();
+  
+  int rc = p.pmtpWriteBegin(ctrl, slotOut, verOut);
+  if (rc != 0) throw Exception("pmtpWriteBegin Failed: rc=$rc");
+  int writeSlot = slotOut.value;
+  int writeVer = verOut.value;
+  print("Escribiendo en el slot: $writeSlot con ver: $writeVer");
+  
+  // Commit write
+  p.pmtpWriteCommit(ctrl, writeSlot, writeVer);
+  print("Commit Write exitoso.");
+  
+  print("Leyendo Buffer...");
+  final readSlotOut = calloc<Uint32>();
+  final readVerOut = calloc<Uint64>();
+  
+  int readStatus = p.pmtpReadBegin(ctrl, readSlotOut, readVerOut);
+  print("readBegin status: $readStatus, slot: ${readSlotOut.value}, ver: ${readVerOut.value}");
+  
+  if (readStatus == 0 && readSlotOut.value == writeSlot) {
+    rc = p.pmtpReadValidate(ctrl, readSlotOut.value, readVerOut.value);
+    if (rc == 0) {
+      print("DART PMTP TEST PASSED: Zero-Copy Bridge Operativo.");
+    } else {
+      print("DART PMTP TEST FAILED: Validate Read failed with rc = $rc");
+    }
+  } else {
+    print("DART PMTP TEST FAILED: readStatus=$readStatus");
+  }
+  
+  calloc.free(rawMemory);
+  calloc.free(slotOut);
+  calloc.free(verOut);
+  calloc.free(readSlotOut);
+  calloc.free(readVerOut);
+}
