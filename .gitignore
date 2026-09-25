@@ -32,3 +32,15 @@ scratch_*.py
 *.mp4
 *.pptx
 
+
+# Backups de conversacion con transcripciones (contienen strings de tokens historicos)
+backup_conversacion.jsonl
+conversacion_recuperada.md
+*_conversacion*.jsonl
+*_conversacion*.md
+
+
+# Scripts de tribunal con API keys hardcodeadas (usar variables de entorno en produccion)
+eval_ai_tribunal*.py
+run_tribunal*.py
+

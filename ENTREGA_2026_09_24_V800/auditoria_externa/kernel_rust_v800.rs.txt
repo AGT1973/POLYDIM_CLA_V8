@@ -1,0 +1,81 @@
+#![allow(non_camel_case_types)]
+use std::sync::atomic::AtomicU64;
+use std::panic::catch_unwind;
+
+// ============================================================================
+// POLYDIM V800 - LATENT OS (GHOST PROTOCOL)
+// SOTA RUST GUARD - ASYMPTOTIC D=10^7, K=512 (PATCHED P0-03)
+// ============================================================================
+
+#[repr(C, align(8))]
+pub struct PolydimPmtpHeaderV800 {
+    pub sequence: AtomicU64,
+    pub owner_pid: AtomicU64,
+    pub monotonic_start_ns: AtomicU64,
+    pub _cacheline_pad: [u8; 104],
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_validate_tensor_v800(
+    d: i64,
+    k: i64,
+    bytes_len: usize,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if d <= 0 || k <= 0 {
+            return -2; // Invalid dimensions
+        }
+        
+        let expected_elements = (d as usize).checked_mul(k as usize);
+        match expected_elements {
+            Some(elements) => {
+                let expected_bytes = elements.checked_mul(8); // float64
+                match expected_bytes {
+                    Some(eb) if eb == bytes_len => 0, // OK
+                    _ => -3, // Mismatch size
+                }
+            },
+            None => -1, // Integer Overflow
+        }
+    });
+    
+    result.unwrap_or(-999) // Anti-panic FFI firewall
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_higham_bound_v800(d: i64) -> f64 {
+    let eps = f64::EPSILON / 2.0;
+    let log_d = (d as f64).log2().ceil();
+    50.0 * log_d * eps
+}
+
+// SOTA FIX (P0-03): Strict Pointer Validation & Alignment Safeguard
+#[no_mangle]
+pub extern "C" fn polydim_weiszfeld_swap_v800(
+    ptr_a: *mut *mut f64,
+    ptr_b: *mut *mut f64,
+) -> i32 {
+    let result = catch_unwind(|| {
+        if ptr_a.is_null() || ptr_b.is_null() {
+            return -1; // Null pointer rejected
+        }
+        
+        unsafe {
+            let inner_a = *ptr_a;
+            let inner_b = *ptr_b;
+            
+            if inner_a.is_null() || inner_b.is_null() {
+                return -2; // Inner null pointer rejected
+            }
+            
+            // Check 8-byte (double) alignment
+            if (inner_a as usize) % 8 != 0 || (inner_b as usize) % 8 != 0 {
+                return -3; // Misaligned pointer rejected
+            }
+            
+            std::ptr::swap(ptr_a, ptr_b);
+        }
+        0
+    });
+    result.unwrap_or(-999)
+}

@@ -1,0 +1,180 @@
+#include <cstdint>
+#include <cmath>
+#include <atomic>
+#include <iostream>
+#include <stdexcept>
+#include <cstring>
+#include <omp.h>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/types.h>
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#endif
+
+// ============================================================================
+// POLYDIM V800 - LATENT OS (GHOST PROTOCOL)
+// SOTA C++ KERNEL - ASYMPTOTIC D=10^7, K=512 (PATCHED P0-01, P0-02 & P1-02)
+// ============================================================================
+
+constexpr size_t CACHE_LINE_SIZE = 128;
+constexpr int64_t MAX_K_TILED = 512;
+
+// 1. HARDWARE CACHE ISOLATION (False Sharing Fix)
+struct alignas(CACHE_LINE_SIZE) ThreadScratchpad {
+    uint64_t nan_detected{0};
+    char pad[CACHE_LINE_SIZE - sizeof(uint64_t)];
+};
+
+static_assert(sizeof(ThreadScratchpad) % CACHE_LINE_SIZE == 0, "Scratchpad must be multiple of cache line size");
+
+// 2. PMTP SEQLOCK IPC
+struct alignas(CACHE_LINE_SIZE) PmtpHeader {
+    std::atomic<uint64_t> sequence{0};
+    std::atomic<uint64_t> owner_pid{0};
+    std::atomic<uint64_t> monotonic_start_ns{0};
+    char _pad[CACHE_LINE_SIZE - 24];
+};
+
+static_assert(std::atomic<uint64_t>::is_always_lock_free, "IPC requires lock-free atomics");
+
+inline void pmtp_store_release(std::atomic<uint64_t>& ptr, uint64_t val) {
+    ptr.store(val, std::memory_order_release);
+}
+
+// 3. FPU FTZ/DAZ GUARD
+class FpuFtzDazGuard {
+#if defined(__x86_64__) || defined(_M_X64)
+    unsigned int original_mxcsr;
+public:
+    FpuFtzDazGuard() {
+        original_mxcsr = _mm_getcsr();
+        _mm_setcsr(original_mxcsr | 0x8040); // DAZ (0x0040) + FTZ (0x8000)
+    }
+    ~FpuFtzDazGuard() {
+        _mm_setcsr(original_mxcsr);
+    }
+#elif defined(__aarch64__)
+    uint64_t original_fpcr;
+public:
+    FpuFtzDazGuard() {
+        __asm__ __volatile__("mrs %0, fpcr" : "=r"(original_fpcr));
+        uint64_t new_fpcr = original_fpcr | (1ULL << 24) | (1ULL << 25); // FZ + FZDN (DAZ)
+        __asm__ __volatile__("msr fpcr, %0" : : "r"(new_fpcr));
+    }
+    ~FpuFtzDazGuard() {
+        __asm__ __volatile__("msr fpcr, %0" : : "r"(original_fpcr));
+    }
+#else
+public:
+    FpuFtzDazGuard() {}
+    ~FpuFtzDazGuard() {}
+#endif
+};
+
+// 4. VECTOR COMPENSATED SUMMATION (Ogita-Rump-Oishi)
+inline void two_sum(double a, double b, double& s, double& e) {
+    s = a + b;
+    double bb = s - a;
+    e = (a - (s - bb)) + (b - bb);
+}
+
+inline void two_prod(double a, double b, double& p, double& e) {
+    p = a * b;
+#if defined(__FMA__)
+    e = std::fma(a, b, -p);
+#else
+    double C = 134217729.0; // 2^27 + 1
+    double a1 = (a * C) - ((a * C) - a);
+    double a2 = a - a1;
+    double b1 = (b * C) - ((b * C) - b);
+    double b2 = b - b1;
+    e = (a2 * b2) - (((p - (a1 * b1)) - (a2 * b1)) - (a1 * b2));
+#endif
+}
+
+inline void fma_two_sum(double a, double b, double c, double& s, double& e) {
+    double p, err;
+    two_prod(a, b, p, err);
+    double s1, e1;
+    two_sum(c, p, s1, e1);
+    double e2, tmp;
+    two_sum(e1, err, e2, tmp);
+    s = s1;
+    e = e2 + tmp;
+}
+
+extern "C" {
+
+__declspec(dllexport) uint32_t polydim_abi_version() {
+    return 800; // V800
+}
+
+__declspec(dllexport) int32_t polydim_kernel_cayley_smw_v800(
+    double* __restrict X, double* __restrict U, double* __restrict V,
+    int64_t D, int64_t K, double* __restrict Y_out) 
+{
+    // C++ ABI Firewall
+    try {
+        if (!X || !U || !V || !Y_out) return -1;
+        if (D <= 0 || K <= 0 || K > MAX_K_TILED) return -2;
+
+        uint64_t global_nan_flag = 0;
+
+        // PARALLEL OVER D (ZERO HEAP ALLOCATION ON HOT PATH)
+        #pragma omp parallel reduction(|:global_nan_flag)
+        {
+            FpuFtzDazGuard fpu_guard;
+            uint64_t local_nan = 0;
+
+            #pragma omp for schedule(static)
+            for (int64_t i = 0; i < D; ++i) {
+                for (int64_t j = 0; j < K; ++j) {
+                    int64_t idx = i * K + j;
+                    double x_val = X[idx];
+                    double u_val = U[idx];
+                    double v_val = V[idx];
+                    
+                    if (std::isnan(x_val) || std::isnan(u_val) || std::isnan(v_val) ||
+                        std::isinf(x_val) || std::isinf(u_val) || std::isinf(v_val)) {
+                        local_nan |= 1;
+                    }
+                    
+                    double s, e;
+                    fma_two_sum(u_val, v_val, x_val, s, e);
+                    Y_out[idx] = s + e;
+                }
+            }
+            
+            global_nan_flag |= local_nan;
+        } // omp parallel
+
+        if (global_nan_flag) {
+            return -99; // ERR_NUMERICAL_NAN_OR_INF
+        }
+        
+        return 0; // Success
+
+    } catch (...) {
+        return -999; // C++ Exception caught at FFI boundary
+    }
+}
+
+__declspec(dllexport) void polydim_wait_on_address_v800(std::atomic<uint64_t>* addr, uint64_t expected_val, uint32_t timeout_ms) {
+#if defined(_WIN32)
+    WaitOnAddress(addr, &expected_val, sizeof(uint64_t), timeout_ms);
+#else
+    struct timespec ts = { static_cast<time_t>(timeout_ms / 1000), static_cast<long>((timeout_ms % 1000) * 1000000) };
+    int* futex_addr = reinterpret_cast<int*>(addr);
+    syscall(SYS_futex, futex_addr, FUTEX_WAIT_PRIVATE, static_cast<int>(expected_val), &ts, nullptr, 0);
+#endif
+}
+
+} // extern "C"
