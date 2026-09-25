@@ -1,0 +1,146 @@
+#![allow(non_camel_case_types)]
+use std::sync::atomic::AtomicU64;
+use std::panic::catch_unwind;
+
+#[cfg(panic = "abort")]
+compile_error!("La librería FFI de POLYDIM requiere panic = \"unwind\"");
+
+// ============================================================================
+// POLYDIM V804 - LATENT OS (GHOST PROTOCOL)
+// SOTA RUST GUARD - ASYMPTOTIC D=10^7, K=512 (FIX-13 & FFI GUARD MACRO)
+// ============================================================================
+
+macro_rules! ffi_guard {
+    ($default:expr, $body:block) => {{
+        match catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(v) => v,
+            Err(_) => {
+                $default
+            }
+        }
+    }};
+}
+
+#[repr(C, align(128))]
+pub struct PolydimPmtpHeaderV804 {
+    pub magic: u64,
+    pub abi_version: u32,
+    pub header_bytes: u32,
+    pub total_bytes: u64,
+    pub ring_offset: u64,
+    pub ring_bytes: u64,
+    pub slot_count: u32,
+    pub slot_stride: u32,
+    pub flags: u64,
+    pub session_id_hi: u64,
+    pub session_id_lo: u64,
+    pub producer_epoch: AtomicU64,
+    pub consumer_epoch: AtomicU64,
+    pub producer_heartbeat_ns: AtomicU64,
+    pub consumer_heartbeat_ns: AtomicU64,
+    pub header_crc_or_mac: u64,
+    pub _pad: [u8; 16],
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_abi_version_rust_v804() -> u32 {
+    804
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_validate_header_v804(
+    header_ptr: *const PolydimPmtpHeaderV804,
+    total_bytes: u64,
+) -> i32 {
+    ffi_guard!(-999, {
+        if header_ptr.is_null() {
+            return -1; // Null pointer
+        }
+
+        unsafe {
+            let hdr = &*header_ptr;
+            if hdr.magic != 0x504D545076303031u64 {
+                return -2; // Magic mismatch
+            }
+            if hdr.abi_version != 804 {
+                return -3; // ABI mismatch
+            }
+            if hdr.header_bytes != 128 {
+                return -4; // Header size mismatch
+            }
+            if hdr.total_bytes != total_bytes {
+                return -5; // Total bytes mismatch
+            }
+            if hdr.ring_offset < 128 || hdr.ring_offset + hdr.ring_bytes > total_bytes {
+                return -6; // Invalid ring bounds
+            }
+            if hdr.slot_count == 0 || hdr.slot_stride == 0 {
+                return -7; // Invalid slot configuration
+            }
+        }
+        0 // VALID
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_validate_tensor_v804(
+    d: i64,
+    k: i64,
+    bytes_len: usize,
+) -> i32 {
+    ffi_guard!(-999, {
+        if d <= 0 || k <= 0 {
+            return -2; // Invalid dimensions
+        }
+        
+        let expected_elements = (d as usize).checked_mul(k as usize);
+        match expected_elements {
+            Some(elements) => {
+                let expected_bytes = elements.checked_mul(8); // float64
+                match expected_bytes {
+                    Some(eb) if eb == bytes_len => 0, // OK
+                    _ => -3, // Mismatch size
+                }
+            },
+            None => -1, // Integer Overflow
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_higham_bound_v804(d: i64) -> f64 {
+    ffi_guard!(0.0, {
+        let eps = f64::EPSILON / 2.0;
+        let log_d = (d as f64).log2().ceil();
+        50.0 * log_d * eps
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_weiszfeld_swap_v804(
+    ptr_a: *mut *mut f64,
+    ptr_b: *mut *mut f64,
+) -> i32 {
+    ffi_guard!(-999, {
+        if ptr_a.is_null() || ptr_b.is_null() {
+            return -1; // Null pointer rejected
+        }
+        
+        unsafe {
+            let inner_a = *ptr_a;
+            let inner_b = *ptr_b;
+            
+            if inner_a.is_null() || inner_b.is_null() {
+                return -2; // Inner null pointer rejected
+            }
+            
+            // Check 8-byte (double) alignment
+            if (inner_a as usize) % 8 != 0 || (inner_b as usize) % 8 != 0 {
+                return -3; // Misaligned pointer rejected
+            }
+            
+            std::ptr::swap(ptr_a, ptr_b);
+        }
+        0
+    })
+}

@@ -1,0 +1,93 @@
+#![allow(non_camel_case_types)]
+use std::sync::atomic::AtomicU64;
+use std::panic::catch_unwind;
+
+#[cfg(panic = "abort")]
+compile_error!("La librería FFI de POLYDIM requiere panic = \"unwind\"");
+
+// ============================================================================
+// POLYDIM V803 - LATENT OS (GHOST PROTOCOL)
+// SOTA RUST GUARD - ASYMPTOTIC D=10^7, K=512 (FIX-13 & FFI GUARD MACRO)
+// ============================================================================
+
+macro_rules! ffi_guard {
+    ($default:expr, $body:block) => {{
+        match catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(v) => v,
+            Err(_) => {
+                $default
+            }
+        }
+    }};
+}
+
+#[repr(C, align(8))]
+pub struct PolydimPmtpHeaderV803 {
+    pub sequence: AtomicU64,
+    pub owner_pid: AtomicU64,
+    pub monotonic_start_ns: AtomicU64,
+    pub _cacheline_pad: [u8; 104],
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_validate_tensor_v803(
+    d: i64,
+    k: i64,
+    bytes_len: usize,
+) -> i32 {
+    ffi_guard!(-999, {
+        if d <= 0 || k <= 0 {
+            return -2; // Invalid dimensions
+        }
+        
+        let expected_elements = (d as usize).checked_mul(k as usize);
+        match expected_elements {
+            Some(elements) => {
+                let expected_bytes = elements.checked_mul(8); // float64
+                match expected_bytes {
+                    Some(eb) if eb == bytes_len => 0, // OK
+                    _ => -3, // Mismatch size
+                }
+            },
+            None => -1, // Integer Overflow
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_higham_bound_v803(d: i64) -> f64 {
+    ffi_guard!(0.0, {
+        let eps = f64::EPSILON / 2.0;
+        let log_d = (d as f64).log2().ceil();
+        50.0 * log_d * eps
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_weiszfeld_swap_v803(
+    ptr_a: *mut *mut f64,
+    ptr_b: *mut *mut f64,
+) -> i32 {
+    ffi_guard!(-999, {
+        if ptr_a.is_null() || ptr_b.is_null() {
+            return -1; // Null pointer rejected
+        }
+        
+        unsafe {
+            let inner_a = *ptr_a;
+            let inner_b = *ptr_b;
+            
+            if inner_a.is_null() || inner_b.is_null() {
+                return -2; // Inner null pointer rejected
+            }
+            
+            // Check 8-byte (double) alignment
+            if (inner_a as usize) % 8 != 0 || (inner_b as usize) % 8 != 0 {
+                return -3; // Misaligned pointer rejected
+            }
+            
+            std::ptr::swap(ptr_a, ptr_b);
+        }
+        0
+    })
+}

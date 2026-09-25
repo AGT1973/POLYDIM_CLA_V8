@@ -23,6 +23,25 @@ import threading
 import numpy as np
 from enum import Enum, auto
 from typing import Dict, Any, Tuple, Optional, List
+import platform
+import subprocess
+
+class HardwareProbe:
+    @staticmethod
+    def get_l1_cache_line_size() -> int:
+        sys_os = platform.system()
+        try:
+            if sys_os == "Linux":
+                return int(os.sysconf('SC_LEVEL1_DCACHE_LINESIZE'))
+            elif sys_os == "Darwin":
+                out = subprocess.check_output(['sysctl', '-n', 'hw.cachelinesize'])
+                return int(out.strip())
+            elif sys_os == "Windows":
+                # Fallback estático a 64 bytes para Windows si no se invoca GetLogicalProcessorInformation con ctypes
+                return 64
+        except Exception:
+            pass
+        return 64 # Default safe fallback
 
 # Resolver rutas de DLLs
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -283,9 +302,20 @@ class PolydimOrchestratorV774:
         shift_reg: float = 1e-12,
         num_threads: int = 4
     ) -> Tuple[np.ndarray, PolydimSolverResult]:
+        if not X_init.flags.c_contiguous or not X_init.flags.aligned:
+            raise ValueError("X_init must be C-contiguous and memory-aligned to avoid silent copies (P1-28).")
+        if X_init.dtype != np.float64:
+            raise ValueError("X_init must be float64.")
+            
         D, K = X_init.shape
-        X = np.ascontiguousarray(X_init.copy(), dtype=np.float64)
-        target_flat = np.ascontiguousarray(target.flatten(), dtype=np.float64) if target is not None else None
+        X = X_init # Zero-copy reference
+
+        if target is not None:
+            if not target.flags.c_contiguous or not target.flags.aligned or target.dtype != np.float64:
+                raise ValueError("Target must be C-contiguous, aligned, and float64.")
+            target_flat = target.reshape(-1)
+        else:
+            target_flat = None
 
         opts = PolydimSolverOptions()
         opts.max_iterations = max_iters
@@ -324,8 +354,10 @@ class PolydimOrchestratorV774:
         dist_threshold: float = 0.35,
         max_tau_betti1: int = 50
     ) -> Tuple[np.ndarray, PolydimFrechetBettiResult]:
+        if not candidates.flags.c_contiguous or not candidates.flags.aligned or candidates.dtype != np.float64:
+            raise ValueError("candidates must be C-contiguous, memory-aligned, and float64 to avoid silent copies.")
         M, D = candidates.shape
-        cand_flat = np.ascontiguousarray(candidates.flatten(), dtype=np.float64)
+        cand_flat = candidates.reshape(-1)
         out_vec = np.zeros(D, dtype=np.float64)
         res = PolydimFrechetBettiResult()
 
