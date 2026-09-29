@@ -296,7 +296,7 @@ def task_git():
             cwd=GIT_CWD
         )
         push = subprocess.run(
-            ["git", "push", "origin", "master:main"],
+            ["git", "push", "origin", "HEAD:main"],
             capture_output=True, text=True, cwd=GIT_CWD
         )
         if push.returncode == 0:

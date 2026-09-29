@@ -286,8 +286,8 @@ POLYDIM_EXPORT int32_t polydim_block_ldlt_rook_solve_v816(
             }
         }
 
+        piv[i] = static_cast<int>(max_row);
         if (max_row != i) {
-            std::swap(piv[i], piv[max_row]);
             for (size_t c = 0; c < N; ++c) {
                 std::swap(LU[i * N + c], LU[max_row * N + c]);
             }
@@ -381,11 +381,11 @@ POLYDIM_EXPORT int32_t polydim_shifted_skew_gmres_solve_v816(
             continue;
         }
 
-        alignas(64) double V[32][2 * MAX_K];
-        alignas(64) double H[32][32];
-        alignas(64) double cs[32];
-        alignas(64) double sn[32];
-        alignas(64) double g[33];
+        alignas(64) double V[64][2 * MAX_K];
+        alignas(64) double H[65][65];
+        alignas(64) double cs[64];
+        alignas(64) double sn[64];
+        alignas(64) double g[65];
 
         std::memset(H, 0, sizeof(H));
         std::memset(g, 0, sizeof(g));
@@ -393,7 +393,8 @@ POLYDIM_EXPORT int32_t polydim_shifted_skew_gmres_solve_v816(
         for (size_t i = 0; i < N; ++i) V[0][i] = b[i] / b_norm;
         g[0] = b_norm;
 
-        int m = std::min(maxit, 30);
+        int m = std::min(static_cast<int>(maxit), static_cast<int>(N));
+        if (m > 64) m = 64;
         int k_conv = m;
 
         for (int k = 0; k < m; ++k) {
@@ -422,7 +423,7 @@ POLYDIM_EXPORT int32_t polydim_shifted_skew_gmres_solve_v816(
             h_next = std::sqrt(h_next);
             H[k + 1][k] = h_next;
 
-            if (h_next > 1e-15 && k + 1 < 32) {
+            if (h_next > 1e-15 && k + 1 < 64) {
                 for (size_t i = 0; i < N; ++i) V[k + 1][i] = w[i] / h_next;
             }
 
@@ -451,7 +452,7 @@ POLYDIM_EXPORT int32_t polydim_shifted_skew_gmres_solve_v816(
         }
 
         // Back-substitution
-        alignas(64) double y[32];
+        alignas(64) double y[64];
         for (int i = k_conv - 1; i >= 0; --i) {
             double s = g[i];
             for (int j = i + 1; j < k_conv; ++j) {
