@@ -25,5 +25,49 @@
     "P0: SOTA Multi-IA Tribunal ingestion for Series 800"
   ],
   "delivery_dir_v774": "E:\\POLYDIM_EINSOF\\ENTREGA_2026_09_24_V774\\",
-  "last_updated": "2026-09-24T10:55:00"
+  "last_updated": "2026-09-24T10:55:00",
+  "pending_infrastructure_events": [
+    {
+      "timestamp": "2026-09-28 22:33:49",
+      "provider": "Ollama <hello@ollama.com>",
+      "subject": "Kimi K3 is now available on Ollama's cloud",
+      "vault": "account_cursos_ai",
+      "action_required": "Verificar nuevos modelos/capacidades en DYNAMIC_COMPUTE_CATALOG.json"
+    },
+    {
+      "timestamp": "2026-09-28 22:34:11",
+      "provider": "ChatGPT <noreply@email.openai.com>",
+      "subject": "Revisa tu ruta antes de salir",
+      "vault": "account_cursos_ai",
+      "action_required": "Verificar nuevos modelos/capacidades en DYNAMIC_COMPUTE_CATALOG.json"
+    },
+    {
+      "timestamp": "2026-09-28 23:22:40",
+      "provider": "ChatGPT <noreply@email.openai.com>",
+      "subject": "Prepara una breve lecci\u00f3n de vocabulario",
+      "vault": "account_cursos_ai",
+      "action_required": "Verificar nuevos modelos/capacidades en DYNAMIC_COMPUTE_CATALOG.json"
+    },
+    {
+      "timestamp": "2026-09-28 23:23:10",
+      "provider": "ChatGPT <noreply@email.openai.com>",
+      "subject": "Cuida de ti con estos consejos sencillos",
+      "vault": "account_cursos_ai",
+      "action_required": "Verificar nuevos modelos/capacidades en DYNAMIC_COMPUTE_CATALOG.json"
+    },
+    {
+      "timestamp": "2026-09-28 23:23:44",
+      "provider": "ChatGPT <noreply@email.openai.com>",
+      "subject": "Empieza a programar con IA gratis en Codex",
+      "vault": "account_cursos_ai",
+      "action_required": "Verificar nuevos modelos/capacidades en DYNAMIC_COMPUTE_CATALOG.json"
+    },
+    {
+      "timestamp": "2026-09-28 23:24:03",
+      "provider": "ChatGPT <noreply@email.openai.com>",
+      "subject": "Pregunta cualquier cosa",
+      "vault": "account_cursos_ai",
+      "action_required": "Verificar nuevos modelos/capacidades en DYNAMIC_COMPUTE_CATALOG.json"
+    }
+  ]
 }

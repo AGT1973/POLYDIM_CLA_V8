@@ -1,0 +1,12 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V805 - PHASE 5 (ORCHESTRATION & BINDINGS)
+TARGET: E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\polydim_monolith.py (or we can use polydim_v804_monolito.py)
+
+CRITICAL ERRORS TO FIX (Category I & H):
+I-4: No validation of C-contiguity in Python before passing arrays to C++.
+H-1: Hardcoded 127.0.0.1.
+
+INSTRUCTIONS:
+1. Create polydim_bindings_v805.py.
+2. Add a helper function ensure_c_contiguous(tensor) that returns 	ensor.contiguous() for PyTorch or 
+p.ascontiguousarray(tensor) for numpy.
+3. Return ONLY "SLAB_ID: SLAB_ORCH_DONE, TENSOR_READY".

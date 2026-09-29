@@ -1,0 +1,214 @@
+{
+  "timestamp": "2026-09-28T22:21:31.794216",
+  "total_lines_audited": 2403,
+  "total_chunks": 16,
+  "ai_status": {
+    "kimi": 16,
+    "deepseek": 16,
+    "claude": 16,
+    "qwen": 16,
+    "cerebras": 16,
+    "gemini": 16
+  },
+  "findings_count": 33,
+  "findings": [
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "1-180",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 KERNEL_CPP_V814 (L\u00edneas 1\u2013180)\n\nModo: RedTeam/Bulldog. Asumo nivel SOTA. Sin concesiones.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `enum class LsmStatus : uint8_t` (L58\u201364)\n**[VERIFIED_STABLE]** \u2014 Underlying type expl\u00edcito, sin colisiones. OK.\n\n### `struct LsmStepRes"
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "1-180",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013 PASADA\u202f1\u202f\u2192\u202f5 (Resumen por entidad)**  \n\n| Entidad | L\u00edneas | Estado | Comentario breve |\n|---------|--------|--------|------------------|\n| `enum class LsmStatus` | 58\u201164 | **[VERIFIED_STABLE]** | Definici\u00f3n correcta, tipo sub\u2011byte (`uint8_t`) y valores expl\u00edcitos. |\n| `struct LsmSt"
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "181-360",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA REDTEAM \u2014 KERNEL_CPP_V814 (L\u00edneas 181\u2013360)\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `polydim_memmove_aligned` (l\u00edneas 181\u2013211) \u2014 **[VULNERABILITY_FOUND]**\n\n**L\u00edneas 186\u2013202.** M\u00faltiples defectos:\n\n1. **L\u00ednea 188:** `reinterpret_cast<uintptr_t>(dest) % 16 == 0` \u2014 solo verifica `dest"
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "181-360",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013 PASS\u202f1\u202f\u2192\u202f5 (POLYDIM\u202fV814 \u2013\u202fkernel_cpp_v814.cpp,\u202flines\u202f181\u2011360)**  \n\nBelow each public\u2011API function the reviewer reports the *syntactic\u2011type* health, *concurrency* correctness, *numeric* safety, *FFI/ABI* compliance and *asymptotic\u2011performance* impact.  The analysis assumes the surro"
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "361-540",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 KERNEL_CPP_V814 (L\u00edneas 361\u2013540)\n\nModo: RedTeam / Bulldog t\u00e9cnico. Sin cortes\u00edas. Cada afirmaci\u00f3n va con prueba o se marca como desconocida.\n\n---\n\n## FUNCI\u00d3N 1: `fwht_normalized_inplace` (L363\u2013375)\n\n### PASADA 1 \u2014 Sintaxis/Tipos\n- `size_t len` con `len <<= 1` hasta `D`. Si `D` "
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "361-540",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013 POLYDIM\u202fV814 \u2013 CHUNK\u202fLines\u202f361\u2011540**  \n\n| Function / Method | Status | Line\u2011range of defect (if any) |\n|-------------------|--------|--------------------------------|\n| `fwht_normalized_inplace` | **[VULNERABILITY_FOUND]** | 363\u2011374 (signed\u2011loop\u2011index overflow) |\n| `polydim_structur"
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "541-636",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA KERNEL_CPP_V814 \u2014 L\u00edneas 541\u2013636\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n**`polar_newton_refinement` (L542\u2013569)**\n- `int max_th = omp_get_max_threads();` \u2192 `scratch(max_th * K, 0.0)`. Si `max_th` retorna 0 (posible en runtimes OMP mal inicializados o tras `omp_set_num_threads(0)`), `s"
+    },
+    {
+      "module": "KERNEL_CPP_V814",
+      "lines": "541-636",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013\u202fChunk\u202f`kernel_cpp_v814.cpp.txt` (lines\u202f541\u2011636)**  \n\n| Function / Symbol | Status |\n|-------------------|--------|\n| `polar_newton_refinement` | **[VULNERABILITY_FOUND]** |\n| `apply_shifted_cholqr2`   | **[VULNERABILITY_FOUND]** |\n| `polydim_abi_probe`       | **[VERIFIED_STABLE]** "
+    },
+    {
+      "module": "KERNEL_RUST_V814",
+      "lines": "1-180",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 KERNEL_RUST_V814 (L\u00edneas 1\u2013179)\n\nModo: RedTeam/Bulldog. Asumo nivel SOTA. Sin concesiones.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `NativeStatus` (L0072\u2013L0077) \u2014 `[VERIFIED_STABLE]`\n`#[repr(i32)]` con discriminantes expl\u00edcitos 0..7. Sin colisiones. `Copy + Eq`. Corr"
+    },
+    {
+      "module": "KERNEL_RUST_V814",
+      "lines": "1-180",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT SUMMARY \u2013 KERNEL_RUST_V814 (lines\u202f1\u2011179)**  \n\n| Item (line(s)) | Status | Comments / Proof of Vulnerability | Suggested Patch |\n|----------------|--------|-----------------------------------|-----------------|\n| 0\u20114 (module header) | **[VERIFIED_STABLE]** | Pure documentation \u2013 no executable"
+    },
+    {
+      "module": "KERNEL_RUST_V814",
+      "lines": "181-342",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 KERNEL_RUST_V814 (L\u00edneas 181\u2013342)\n\n**Contexto cr\u00edtico previo:** El chunk comienza en L181 dentro de una funci\u00f3n no mostrada (probablemente `polydim_rust_betti1_homology`). Auditar\u00e9 lo visible y marcar\u00e9 expl\u00edcitamente lo que depende de contexto no provisto.\n\n---\n\n## BLOQUE A \u2014 C"
+    },
+    {
+      "module": "KERNEL_RUST_V814",
+      "lines": "181-342",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT SUMMARY \u2013 POLYDIM\u202fRUST\u202fV814 (lines\u202f181\u2011342)**  \n\n| Function / Item | Overall Status | Short Reason |\n|-----------------|----------------|--------------|\n| `polydim_rust_topoguard` (the fragment 181\u2011190) | **[VULNERABILITY_FOUND]** | Integer\u2011overflow / truncation when converting `valid_edges`"
+    },
+    {
+      "module": "TRITON_KERNEL_V814",
+      "lines": "1-77",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 TRITON_KERNEL_V814 (L\u00edneas 1\u201377)\n\n**Rol:** RedTeam / Bulldog t\u00e9cnico. **Modo:** hostil, sin cortes\u00eda. **Supuestos:** nivel SOTA, sin explicaciones pedag\u00f3gicas.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `dsyrk_triton_kernel` (L20\u201354)\n\n**L\u00ednea 0035:** `acc = tl.zeros((B"
+    },
+    {
+      "module": "TRITON_KERNEL_V814",
+      "lines": "1-77",
+      "ai": "cerebras",
+      "report_snippet": "## RESUMEN DE AUDITOR\u00cdA (PASADAS\u202f1\u20115)\n\n| Funci\u00f3n / bloque | Estado global | Comentario breve |\n|------------------|----------------|------------------|\n| `dsyrk_triton_kernel` | **[VULNERABILITY_FOUND]** | Se detectan **races de escritura**, **uso no\u2011verificado de `float64` en GPUs que no lo soporta"
+    },
+    {
+      "module": "MONOLITO_V814",
+      "lines": "1-180",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 POLYDIM V814 MONOLITO (L\u00edneas 0001\u20130180)\n\n**Rol:** RedTeam / Bulldog t\u00e9cnico. Asumo nivel PhD/SOTA. Sin concesiones.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `PolydimTelemetryEvent` (L0044\u20130051)\n`_pack_ = 8`, campos: `u64 + u32 + u32 + double[14]`.\n- Offset 0: `times"
+    },
+    {
+      "module": "MONOLITO_V814",
+      "lines": "1-180",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013\u202fPOLYDIM\u202fV814\u202fMONOLITO (l\u00edneas\u202f1\u2011180)**  \n\n| # | Elemento (l\u00edneas) | Estado | Comentario breve |\n|---|-------------------|--------|------------------|\n| 1 | `PolydimTelemetryEvent` (44\u201151) | **[VERIFIED_STABLE]** | Packing\u202f=\u202f8 y campos alineados a 8\u202fbytes; tama\u00f1o\u202f=\u202f128\u202fB, coincide co"
+    },
+    {
+      "module": "MONOLITO_V814",
+      "lines": "181-231",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 MONOLITO_V814, L\u00cdNEAS 181\u2013231\n\n**Rol:** RedTeam / Bulldog t\u00e9cnico.\n**Alcance:** `verify_topology`, `frechet_consensus`, bloque `__main__`, y el cierre del m\u00e9todo `stiefel_parallel_transport` (l\u00edneas 181\u2013186).\n**Premisa:** Asumo ABI Rust\u2194Python v\u00eda `ctypes`, `rust_lib` cargado p"
+    },
+    {
+      "module": "MONOLITO_V814",
+      "lines": "181-231",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT SUMMARY \u2013\u202fChunk\u202fE:\\POLYDIM_EINSOF\\ENTREGA_2026_09_28_V814\\polydim_v814_monolito.py (lines\u202f181\u2011231)**  \n\n| Entity (line range) | Status | Findings / Proofs (if any) | Recommended Patch |\n|----------------------|--------|----------------------------|-------------------|\n| **`polydim_stiefel_pa"
+    },
+    {
+      "module": "TEST_SUITE_V814",
+      "lines": "1-180",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 TEST_SUITE_V814 (L\u00edneas 0001\u20130180)\n\nModo: RedTeam / Bulldog t\u00e9cnico. Asumo nivel SOTA. Cero indulgencia.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `PolydimTelemetryEvent` (L0067\u20130074) \u2014 **[VULNERABILITY_FOUND]**\n\n**Rango:** 0067\u20130074\n**Causa ra\u00edz:** `_pack_ = 8` con `"
+    },
+    {
+      "module": "TEST_SUITE_V814",
+      "lines": "1-180",
+      "ai": "cerebras",
+      "report_snippet": "## POLYDIM\u202fV814 \u2013\u202fAUDIT OF **test_v814_comprehensive_suite.py** (Lines\u202f1\u2011180)  \n**Scope:**  All user\u2011visible symbols that cross the Python\u202f\u2194\u202fnative\u2011code boundary (ctypes structs, DLL entry\u2011points, and the Python\u2011side harness that invokes them).  \n\nThe audit is organised in the five mandatory passes."
+    },
+    {
+      "module": "TEST_SUITE_V814",
+      "lines": "181-345",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE V814 \u2014 CHUNK 181-345\n\n**Rol:** RedTeam / Bulldog t\u00e9cnico\n**Target:** `test_v814_comprehensive_suite.py` L181\u2013345\n**Nivel asumido:** SOTA / PhD. Sin explicaciones b\u00e1sicas.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### L181\u2013215: `TEST 4` \u2014 Levi-Civita Parallel Transport\n\n**An"
+    },
+    {
+      "module": "TEST_SUITE_V814",
+      "lines": "181-345",
+      "ai": "cerebras",
+      "report_snippet": "## AUDIT SUMMARY \u2013\u202fCHUNK\u202fLines\u202f181\u2011345  \n**Target:** Python test harness that drives native C / Rust libraries through `ctypes`.  \n**Scope:** Every `ctypes.Structure` definition and every call site that marshals data across the FFI boundary.  \n\nFor each *entity* we give a deterministic status and, w"
+    },
+    {
+      "module": "RCU_FUTEX_V813",
+      "lines": "1-180",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 `pmtp_rcu_v813.cpp` (L\u00edneas 1\u2013180)\n\n**Rol:** RedTeam / Bulldog t\u00e9cnico. Asumo arquitectura POLYDIM V813, SOTA, sin concesiones pedag\u00f3gicas.\n\nAntes de entrar en cada funci\u00f3n, fijo el **modelo de memoria** que el c\u00f3digo *pretende* implementar, porque la mayor\u00eda de los bugs son de"
+    },
+    {
+      "module": "RCU_FUTEX_V813",
+      "lines": "1-180",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT OF `pmtp_rcu_v813.cpp` (l\u00edneas\u202f0\u2011180)**  \n**M\u00e9todo de revisi\u00f3n:** 5 pasadas solicitadas (tipo\u2011casteo, concurrencia, valores num\u00e9ricos, ABI/FFI, complejidad).  \n**Hip\u00f3tesis de entorno:** C++17, compilador\u202fMSVC\u202f/\u202fgcc\u202fcon soporte AVX\u2011512, arquitectura x86\u201164, alineaci\u00f3n natural (8\u202fbytes) y `#pr"
+    },
+    {
+      "module": "RCU_FUTEX_V813",
+      "lines": "181-342",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 `pmtp_rcu_v813.cpp` L181\u2013342\n\n**Modo:** RedTeam / Bulldog t\u00e9cnico. Asumo nivel SOTA. Sin cortes\u00edas.\n\nAntes de entrar en las 5 pasadas, fijo el **modelo de memoria asumido**: C++20, `std::atomic<T>` sobre tipos trivialmente copiables, `PmtpBankedSlotHeader` reside en **shared me"
+    },
+    {
+      "module": "RCU_FUTEX_V813",
+      "lines": "181-342",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013\u202fRCU\u202f/\u202fFUTEX\u202fHybrid Engine (pmtp_rcu_v813.cpp \u202flines\u202f181\u2011342)**  \n\n| Function (line range) | Verdict | Summary of Findings |\n|------------------------|---------|----------------------|\n| `pmtp_banked_slot_release_reader` (185\u2011196) | **[VULNERABILITY_FOUND]** | UB due to reinterpret\u2011c"
+    },
+    {
+      "module": "QUANTUM_BRIDGE",
+      "lines": "1-180",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA POLYDIM V814 \u2014 QUANTUM_BRIDGE (L1\u2013180)\n\n**Modo:** RedTeam / Bulldog t\u00e9cnico. Sin cortes\u00edas. Sin \"buenas pr\u00e1cticas\". Solo fallos demostrables.\n\n**Nota meta-forense previa (cr\u00edtica al encabezado):** El archivo declara \"Theorem 2.7\" y \"Gridsynth decomposition\" pero **no implementa Gridsynth"
+    },
+    {
+      "module": "QUANTUM_BRIDGE",
+      "lines": "1-180",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT RESULT \u2013 POLYDIM\u202fQuantum\u202fBridge (lines\u202f1\u2011180)**  \n\n| Function / Method | Pass\u20111 (Tipos) | Pass\u20112 (Concurrencia) | Pass\u20113 (Num\u00e9rico) | Pass\u20114 (FFI/ABI) | Pass\u20115 (Rendimiento) | Verdict |\n|-------------------|----------------|-----------------------|-------------------|------------------|-----"
+    },
+    {
+      "module": "QUANTUM_BRIDGE",
+      "lines": "181-253",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 QUANTUM_BRIDGE (L181\u2013253)\n\n**Nota de alcance:** El chunk entregado contiene \u00fanicamente el *tail* de `simulate_unitary_fidelity` (L181\u2013206) y el bloque `__main__` (L212\u2013253). Las funciones `decompose_bivector_plane`, `synthesize_clifford_t_rz`, `generate_openqasm3` y `compute_ba"
+    },
+    {
+      "module": "QUANTUM_BRIDGE",
+      "lines": "181-253",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT SUMMARY \u2013\u202fChunk\u202fE:\\POLYDIM_EINSOF\\src\\polydim_quantum_bridge.py (lines\u202f181\u2011253)**  \n\n| Entity (as defined in this chunk) | Pass\u20111\u202f(Syntax\u202f&\u202fTypes) | Pass\u20112\u202f(Structure\u202f&\u202fConcurrency) | Pass\u20113\u202f(Numeric\u202fEdge\u2011Cases) | Pass\u20114\u202f(FFI\u202f/\u202fABI) | Pass\u20115\u202f(Asymptotics\u202f&\u202fPerformance) | Overall Verdict |\n|-"
+    },
+    {
+      "module": "RIEMANN_JIT",
+      "lines": "1-177",
+      "ai": "deepseek",
+      "report_snippet": "# AUDITOR\u00cdA FORENSE \u2014 POLYDIM V814 / RIEMANN_JIT (L1\u2013177)\n\nModo: RedTeam/Bulldog. Asumo nivel SOTA. Cero indulgencia. Cada afirmaci\u00f3n va con l\u00ednea, causa ra\u00edz, prueba y parche.\n\n---\n\n## PASADA 1 \u2014 Escaneo Sint\u00e1ctico & Tipos\n\n### `get_geometry_signature` (L30\u201333)\n**Status: [VULNERABILITY_FOUND]**\n\n- "
+    },
+    {
+      "module": "RIEMANN_JIT",
+      "lines": "1-177",
+      "ai": "qwen",
+      "report_snippet": "### PASADA 1 (Escaneo Sint\u00e1ctico & Tipos)\n\n#### `PolydimRiemannJITEngine` Class\n- **`__init__` Method**\n  - **Status**: [VERIFIED_STABLE]\n  - **Reason**: No type errors, all variables are correctly typed and initialized.\n\n- **`get_geometry_signature` Method**\n  - **Status**: [VERIFIED_STABLE]\n  - **"
+    },
+    {
+      "module": "RIEMANN_JIT",
+      "lines": "1-177",
+      "ai": "cerebras",
+      "report_snippet": "**AUDIT SUMMARY \u2013 POLYDIM\u202fRIEMANN\u202fJIT ENGINE (lines\u202f1\u2011177)**  \nFive\u2011pass \u201cRed\u2011Team\u201d review as requested.  All findings are expressed with full mathematical rigor; where a proof is not known the answer is explicitly *unknown*.\n\n---\n\n## 1\ufe0f\u20e3 PASADA\u202f1 \u2013 **SINT\u00c1CTICO & TIPADO**  \n\n| Function / Method | S"
+    }
+  ]
+}

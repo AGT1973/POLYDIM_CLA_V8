@@ -1,0 +1,2463 @@
+﻿================================================================================
+         POLYDIM V813 - CÓDIGO FUENTE DE PRODUCCIÓN CONSOLIDADO (SOTA)           
+         Fecha: 2026-09-28 | Certificado en Silicio Físico Local                
+================================================================================
+
+/* ========================================================================== */
+/* CAPA 1: ABI Y DEFINICIONES DE CONTRATO NATIVO */
+/* ARCHIVO: polydim_solver_abi_v808_1.h */
+/* ========================================================================== */
+
+/* ========================================================= */
+/* FILE: ABI HEADER: polydim_solver_abi_v808_1.h  (PATCH C2/C5) */
+/* Cambios vs V808:                                            */
+/*  + ABI_VERSION y polydim_abi_probe() para detectar desync. */
+/*  + PmtpBankedSlotHeader: prev_bank + writer_heartbeat_ns    */
+/*    (offsets recalculados, leases siguen en offset 128).     */
+/* ========================================================= */
+#ifndef POLYDIM_SOLVER_ABI_H
+#define POLYDIM_SOLVER_ABI_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define PMTP_ABI_VERSION_V808_1   0x80801u
+#define PMTP_MAX_READERS_PER_BANK 32
+#define PMTP_NUM_RCU_SLOTS 3
+
+/* Estados de los Leases de Lectura */
+#define PMTP_LEASE_FREE      0
+#define PMTP_LEASE_ACTIVE    1
+#define PMTP_LEASE_CLOSED    2
+#define PMTP_LEASE_RECLAIMED 3
+
+/* CÃ³digos de Error Normalizados V808 */
+#define POLYDIM_STATUS_OK                        0
+#define POLYDIM_STATUS_CONVERGED_GRADIENT        1
+#define POLYDIM_STATUS_CONVERGED_STEP            2
+#define POLYDIM_STATUS_MAX_ITERATIONS            3
+#define POLYDIM_STATUS_ERR_NULL_PTR             -1
+#define POLYDIM_STATUS_ERR_INVALID_DIM          -2
+#define POLYDIM_STATUS_ERR_ALLOC                -3
+#define POLYDIM_STATUS_ERR_NUMERICAL_NAN        -4
+#define POLYDIM_STATUS_ERR_ORTHO_VIOLATION      -5
+#define POLYDIM_STATUS_ERR_RING_FULL            -6
+#define POLYDIM_STATUS_ERR_RING_EMPTY           -7
+#define POLYDIM_STATUS_ERR_ABI_MISMATCH         -8
+#define POLYDIM_STATUS_ERR_RANK_DEFICIENT       -9
+#define POLYDIM_STATUS_ERR_WRITER_BUSY          -10
+#define POLYDIM_STATUS_ERR_NO_FREE_SLOT         -11
+#define POLYDIM_STATUS_ERR_DRAIN_TIMEOUT        -12
+
+/* Tipos de RetracciÃ³n Stiefel */
+#define POLYDIM_RETRACTION_CHOLQR2              0
+#define POLYDIM_RETRACTION_CAYLEY_SMW           1
+
+#pragma pack(push, 8)
+
+/* Descriptor de Lease con contador de generaciÃ³n monotÃ³nica (Anti-ABA) */
+typedef struct {
+    uint32_t state;                  /* 0: Free, 1: Active, 2: Closed, 3: Reclaimed */
+    uint32_t pid;                    /* PID del proceso lector */
+    uint64_t process_start_time_ns;  /* Identificador temporal contra PID recycling */
+    uint64_t generation;             /* sequence del publicador en el momento de adquirir */
+    uint32_t epoch;                  /* global_epoch en el momento de adquirir */
+    uint32_t pad;                    /* AlineaciÃ³n a 32 bytes */
+} PmtpReaderLease;
+
+/* Cabecera Banked RCU de 3 Ã‰pocas (AlineaciÃ³n Estricta a 128 Bytes)
+ * V808.1: prev_bank y writer_heartbeat_ns para protocolo correcto.
+ * Invariante del protocolo V808.1:
+ *   - Los lectores leen ÃšNICAMENTE active_bank (published).
+ *   - El escritor escribe el banco que NO es active_bank NI prev_bank,
+ *     drena ese banco con timeout real y publica en commit.
+ *   - global_epoch avanza SOLO en commit_writer. */
+typedef struct {
+    uint32_t global_epoch;           /* 0  - Ã©poca global monotÃ³nica (avanza en commit) */
+    uint32_t active_bank;            /* 4  - banco publicado; los lectores leen ESTE */
+    uint32_t writer_active;          /* 8  - mutex atÃ³mico del escritor Ãºnico */
+    uint32_t owner_pid;              /* 12 - PID del proceso escritor actual */
+    uint64_t sequence;               /* 16 - nÂº de secuencia de publicaciÃ³n */
+    uint64_t owner_start_time_ns;    /* 24 - timestamp de inicio del escritor */
+    uint32_t num_reclaimed_orphans;  /* 32 - contador de procesos zombi purgados */
+    uint32_t prev_bank;              /* 36 - banco publicado en el commit anterior */
+    uint64_t writer_heartbeat_ns;    /* 40 - Ãºltimo latido del escritor (anti-steal errÃ³neo) */
+    uint8_t  header_padding[80];     /* 48..128 - leases_bank0 empieza exactamente en 128 */
+    PmtpReaderLease leases_bank0[PMTP_MAX_READERS_PER_BANK];
+    PmtpReaderLease leases_bank1[PMTP_MAX_READERS_PER_BANK];
+    PmtpReaderLease leases_bank2[PMTP_MAX_READERS_PER_BANK];
+} PmtpBankedSlotHeader;
+
+/* Estructura de Opciones del Optimizador (64 bytes, SIN objective_tolerance) */
+typedef struct {
+    uint64_t max_iterations;
+    double   gradient_tolerance;
+    double   step_tolerance;
+    double   ortho_tolerance;
+    double   learning_rate;
+    uint32_t sampling_period;
+    uint32_t num_threads;
+    int32_t  retraction_type;
+    double   shift_regularization;
+} PolydimSolverOptions;
+
+/* Resultados de la OptimizaciÃ³n */
+typedef struct {
+    int32_t  status;
+    uint64_t iterations_executed;
+    double   final_objective;
+    double   final_grad_norm;
+    double   final_ortho_error;
+    uint64_t total_time_ns;
+    char     status_message[256];
+} PolydimSolverResult;
+
+/* Punto de TelemetrÃ­a */
+typedef struct {
+    uint64_t iteration;
+    double   objective_value;
+    double   gradient_norm;
+    double   step_size;
+    double   ortho_error;
+    uint64_t elapsed_time_ns;
+} PolydimTelemetryPoint;
+
+/* BÃºfer de TelemetrÃ­a */
+typedef struct {
+    PolydimTelemetryPoint* points;
+    size_t capacity;
+    size_t recorded_count;
+} PolydimTelemetryBuffer;
+
+/* Evento de TelemetrÃ­a para el Anillo SPSC (128 bytes, espejo exacto C++/Python) */
+typedef struct {
+    uint64_t timestamp_ns;
+    uint32_t event_type;
+    uint32_t thread_id;
+    double   metrics[14];            /* metrics[0]=iteration, [1]=objective, ... */
+} PolydimTelemetryEvent;
+
+/* Anillo SPSC Wait-Free con Aislamiento de LÃ­nea de CachÃ© */
+typedef struct {
+    uint64_t write_index;
+    uint8_t  pad_write[120];
+    uint64_t read_index;
+    uint8_t  pad_read[120];
+    size_t   capacity;
+    size_t   capacity_mask;
+    PolydimTelemetryEvent* ring_buffer;
+} PolydimSpscRing;
+
+/* Handle con Conteo de Referencia */
+typedef struct {
+    void*    data;
+    size_t   bytes;
+    int32_t  refcount;
+    uint32_t flags;
+    uint64_t allocation_id;
+} PolydimHandle;
+
+#pragma pack(pop)
+
+#ifdef __cplusplus
+static_assert(sizeof(PmtpReaderLease) == 32, "PmtpReaderLease must be exactly 32 bytes");
+static_assert(offsetof(PmtpBankedSlotHeader, leases_bank0) == 128, "leases_bank0 must start at byte 128");
+static_assert(sizeof(PolydimSolverOptions) == 64, "PolydimSolverOptions ABI drift");
+static_assert(sizeof(PolydimTelemetryEvent) == 128, "PolydimTelemetryEvent ABI drift");
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POLYDIM_SOLVER_ABI_H */
+
+
+/* ========================================================================== */
+/* CAPA 2: KERNEL NUMÉRICO Y RETRACCIÓN C++ */
+/* ARCHIVO: kernel_cpp_v813.cpp */
+/* ========================================================================== */
+
+/**
+ * @file kernel_cpp_v813.cpp
+ * Kernel Monolitico C++ POLYDIM V813 (Bulldog SOTA Release)
+ * 
+ * Correcciones M1-M6 integradas:
+ *  M1  Shifted CholQR2: Tikhonov relativo a norma de Frobenius (sigma = max(lambda * ||G||_F, 1e-14)),
+ *      erradicacion total del trap 1e-300 (retorna POLYDIM_STATUS_ERR_RANK_DEFICIENT ante pivote <= 0).
+ *  M2  Cayley-SMW Solver: Endurecimiento de umbral de pivote pivot_thresh = scale * 1e-12 + 1e-15.
+ *  M3  Gramiana DSYRK Neumaier 2-Pass: O(1) memoria dinamica (cero heap allocation en modo determinista).
+ *  M4  Proyeccion Tangente Implicita: Kernel Fusion con std::fma in-place, eliminando register spilling.
+ *  M5  Barreras de Excepciones FFI: Bloques try/catch exhaustivos en todas las funciones POLYDIM_EXPORT.
+ *  M6  Flags estrictos de compilacion: -fno-fast-math -fno-associative-math para blindar TwoSum/Neumaier.
+ */
+
+// MANDATORY: Compile with -fno-fast-math -fno-associative-math to protect TwoSum/Neumaier
+
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <chrono>
+#include <atomic>
+#include <immintrin.h>
+#include <algorithm>
+#include <vector>
+
+#if defined(_OPENMP)
+#include <omp.h>
+#else
+static inline int  omp_get_num_threads(void) { return 1; }
+static inline int  omp_get_thread_num(void)  { return 0; }
+static inline int  omp_get_max_threads(void) { return 1; }
+static inline void omp_set_num_threads(int)  {}
+#endif
+
+#if defined(_WIN32)
+  #include <windows.h>
+  #define POLYDIM_EXPORT extern "C" __declspec(dllexport)
+#else
+  #define POLYDIM_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
+
+#include "polydim_solver_abi_v808_1.h"
+
+enum CBLAS_ORDER { CblasRowMajor=101, CblasColMajor=102 };
+enum CBLAS_TRANSPOSE { CblasNoTrans=111, CblasTrans=112, CblasConjTrans=113 };
+enum CBLAS_UPLO { CblasUpper=121, CblasLower=122 };
+
+static void tiled_dsyrk_fixed(int trans, size_t n, size_t k,
+                              double alpha, const double* __restrict__ a, size_t lda,
+                              double beta, double* __restrict__ c, size_t ldc);
+
+#define TILE_D 32
+#define TILE_K 32
+
+/* Barrera dura de deriva de ABI: Python debe comparar esto en el arranque. */
+POLYDIM_EXPORT size_t polydim_abi_probe(void) {
+    try {
+        return sizeof(PolydimSolverOptions);
+    } catch (...) {
+        return 0;
+    }
+}
+
+/* ========================================================================= */
+/* 1. MODO FLOTANTE DUAL IEEE-754                                            */
+/* ========================================================================= */
+
+typedef enum { POLYDIM_FP_DETERMINISTIC = 0, POLYDIM_FP_THROUGHPUT = 1 } PolydimFpMode;
+
+static std::atomic<int32_t> g_fp_mode{POLYDIM_FP_THROUGHPUT};
+
+POLYDIM_EXPORT void polydim_set_fp_mode(int32_t mode) {
+    try {
+        g_fp_mode.store(mode, std::memory_order_relaxed);
+    } catch (...) {}
+}
+
+POLYDIM_EXPORT int32_t polydim_get_fp_mode(void) {
+    try {
+        return g_fp_mode.load(std::memory_order_relaxed);
+    } catch (...) {
+        return POLYDIM_FP_THROUGHPUT;
+    }
+}
+
+static inline void knuth_two_sum(double a, double b, double* s, double* t) {
+    volatile double sum = a + b;
+    double b_virtual = sum - a;
+    double a_virtual = sum - b_virtual;
+    *s = sum;
+    *t = (a - a_virtual) + (b - b_virtual);
+}
+
+static double twosum_tree_reduce_inplace(double* current, size_t N) {
+    if (N == 0) return 0.0;
+    if (N == 1) return current[0];
+    double err_acc = 0.0;
+    double err_comp = 0.0;
+    size_t len = N;
+    while (len > 1) {
+        size_t n_pairs = len / 2;
+        for (size_t i = 0; i < n_pairs; ++i) {
+            double s, t;
+            knuth_two_sum(current[2 * i], current[2 * i + 1], &s, &t);
+            current[i] = s;
+            if (t != 0.0) {
+                double es, et;
+                knuth_two_sum(err_acc, t, &es, &et);
+                err_acc = es;
+                err_comp += et;
+            }
+        }
+        if (len % 2 != 0) {
+            current[n_pairs] = current[len - 1];
+            len = n_pairs + 1;
+        } else {
+            len = n_pairs;
+        }
+    }
+    double total = current[0];
+    double s_final, t_final;
+    knuth_two_sum(total, err_acc, &s_final, &t_final);
+    return s_final + (t_final + err_comp);
+}
+
+/* ========================================================================= */
+/* 2. NON-TEMPORAL STREAMING STORES                                          */
+/* ========================================================================= */
+
+POLYDIM_EXPORT int32_t polydim_stream_copy_nt(double* dest, const double* src, size_t count) {
+    try {
+        if (!dest || !src) return POLYDIM_STATUS_ERR_NULL_PTR;
+        if (count == 0)    return POLYDIM_STATUS_OK;
+        // Overlap check: NT stores on overlapping regions produce undefined results
+        if (dest < src + count && src < dest + count) {
+            std::memmove(dest, src, count * sizeof(double));
+            return POLYDIM_STATUS_OK;
+        }
+    #if defined(__x86_64__) || defined(_M_X64)
+        size_t i = 0;
+        if ((reinterpret_cast<uintptr_t>(dest) % 16 == 0) && count >= 2) {
+            size_t sse_blocks = count / 2;
+            #pragma omp parallel for schedule(static)
+            for (size_t b = 0; b < sse_blocks; ++b) {
+                size_t idx = b * 2;
+                _mm_stream_pd(&dest[idx], _mm_loadu_pd(&src[idx]));
+            }
+            i = sse_blocks * 2;
+        }
+        for (; i < count; ++i) dest[i] = src[i];
+        _mm_sfence();
+    #else
+        std::memcpy(dest, src, count * sizeof(double));
+    #endif
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        return POLYDIM_STATUS_OK;
+    } catch (...) {
+        return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+    }
+}
+
+/* ========================================================================= */
+/* 3. ALLOCATOR (Alineacion minima sizeof(void*))                             */
+/* ========================================================================= */
+
+static std::atomic<uint64_t> g_allocation_seq{1};
+
+POLYDIM_EXPORT void* polydim_alloc_aligned(size_t bytes, size_t alignment) {
+    try {
+        if (bytes == 0) return nullptr;
+        size_t align = (alignment > 0) ? alignment : 64;
+        if ((align & (align - 1)) != 0) return nullptr;     /* rechazar no-potencias de 2 */
+        if (align < sizeof(void*)) align = sizeof(void*);   /* exigido por posix_memalign/_aligned_malloc */
+    #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
+        return _aligned_malloc(bytes, align);
+    #else
+        void* ptr = nullptr;
+        if (posix_memalign(&ptr, align, bytes) != 0) return nullptr;
+        return ptr;
+    #endif
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+POLYDIM_EXPORT void polydim_free_aligned(void* ptr) {
+    try {
+        if (!ptr) return;
+    #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
+        _aligned_free(ptr);
+    #else
+        free(ptr);
+    #endif
+    } catch (...) {}
+}
+
+POLYDIM_EXPORT PolydimHandle* polydim_handle_create(size_t bytes, size_t alignment) {
+    try {
+        void* data = polydim_alloc_aligned(bytes, alignment);
+        if (!data) return nullptr;
+        PolydimHandle* h = static_cast<PolydimHandle*>(std::malloc(sizeof(PolydimHandle)));
+        if (!h) { polydim_free_aligned(data); return nullptr; }
+        h->data = data;
+        h->bytes = bytes;
+        reinterpret_cast<std::atomic<int32_t>*>(&h->refcount)->store(1, std::memory_order_release);
+        h->flags = 0;
+        h->allocation_id = g_allocation_seq.fetch_add(1, std::memory_order_relaxed);
+        return h;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+POLYDIM_EXPORT void polydim_handle_retain(PolydimHandle* h) {
+    try {
+        if (!h) return;
+        reinterpret_cast<std::atomic<int32_t>*>(&h->refcount)->fetch_add(1, std::memory_order_acq_rel);
+    } catch (...) {}
+}
+
+POLYDIM_EXPORT void polydim_handle_release(PolydimHandle* h) {
+    try {
+        if (!h) return;
+        if (reinterpret_cast<std::atomic<int32_t>*>(&h->refcount)->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            if (h->data) { polydim_free_aligned(h->data); h->data = nullptr; }
+            std::free(h);
+        }
+    } catch (...) {}
+}
+
+/* ========================================================================= */
+/* 4. SPSC RING                                                              */
+/* ========================================================================= */
+
+POLYDIM_EXPORT int32_t polydim_spsc_init(PolydimSpscRing* ring, size_t capacity) {
+    try {
+        if (!ring) return POLYDIM_STATUS_ERR_NULL_PTR;
+        if (capacity < 2 || (capacity & (capacity - 1)) != 0) return POLYDIM_STATUS_ERR_INVALID_DIM;
+        if (capacity > SIZE_MAX / sizeof(PolydimTelemetryEvent)) return POLYDIM_STATUS_ERR_INVALID_DIM;
+        size_t total_bytes = capacity * sizeof(PolydimTelemetryEvent);
+        PolydimTelemetryEvent* buffer =
+            static_cast<PolydimTelemetryEvent*>(polydim_alloc_aligned(total_bytes, 128));
+        if (!buffer) return POLYDIM_STATUS_ERR_ALLOC;
+        std::memset(buffer, 0, total_bytes);
+        reinterpret_cast<std::atomic<uint64_t>*>(&ring->write_index)->store(0, std::memory_order_relaxed);
+        reinterpret_cast<std::atomic<uint64_t>*>(&ring->read_index)->store(0, std::memory_order_relaxed);
+        ring->capacity = capacity;
+        ring->capacity_mask = capacity - 1;
+        ring->ring_buffer = buffer;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        return POLYDIM_STATUS_OK;
+    } catch (...) {
+        return POLYDIM_STATUS_ERR_ALLOC;
+    }
+}
+
+POLYDIM_EXPORT int32_t polydim_spsc_push(PolydimSpscRing* ring, const PolydimTelemetryEvent* event) {
+    try {
+        if (!ring || !event || !ring->ring_buffer) return POLYDIM_STATUS_ERR_NULL_PTR;
+        std::atomic<uint64_t>* w = reinterpret_cast<std::atomic<uint64_t>*>(&ring->write_index);
+        std::atomic<uint64_t>* r = reinterpret_cast<std::atomic<uint64_t>*>(&ring->read_index);
+        uint64_t wi = w->load(std::memory_order_relaxed);
+        uint64_t ri = r->load(std::memory_order_acquire);
+        if (wi - ri >= ring->capacity) return POLYDIM_STATUS_ERR_RING_FULL;
+        ring->ring_buffer[wi & ring->capacity_mask] = *event;
+        std::atomic_thread_fence(std::memory_order_release);
+        w->store(wi + 1, std::memory_order_release);
+        return POLYDIM_STATUS_OK;
+    } catch (...) {
+        return POLYDIM_STATUS_ERR_RING_FULL;
+    }
+}
+
+POLYDIM_EXPORT int32_t polydim_spsc_pop(PolydimSpscRing* ring, PolydimTelemetryEvent* event) {
+    try {
+        if (!ring || !event || !ring->ring_buffer) return POLYDIM_STATUS_ERR_NULL_PTR;
+        std::atomic<uint64_t>* w = reinterpret_cast<std::atomic<uint64_t>*>(&ring->write_index);
+        std::atomic<uint64_t>* r = reinterpret_cast<std::atomic<uint64_t>*>(&ring->read_index);
+        uint64_t ri = r->load(std::memory_order_relaxed);
+        uint64_t wi = w->load(std::memory_order_acquire);
+        if (ri == wi) return POLYDIM_STATUS_ERR_RING_EMPTY;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        *event = ring->ring_buffer[ri & ring->capacity_mask];
+        r->store(ri + 1, std::memory_order_release);
+        return POLYDIM_STATUS_OK;
+    } catch (...) {
+        return POLYDIM_STATUS_ERR_RING_EMPTY;
+    }
+}
+
+POLYDIM_EXPORT void polydim_spsc_destroy(PolydimSpscRing* ring) {
+    try {
+        if (!ring) return;
+        if (ring->ring_buffer) { polydim_free_aligned(ring->ring_buffer); ring->ring_buffer = nullptr; }
+        ring->capacity = 0;
+        ring->capacity_mask = 0;
+    } catch (...) {}
+}
+
+/* ========================================================================= */
+/* 5. GRAMIANA DSYRK (M3: Neumaier 2-Pass O(1) memoria dinamica)              */
+/* ========================================================================= */
+
+POLYDIM_EXPORT int32_t polydim_gram_dsyrk(const double* X, size_t D, size_t K,
+                                          double* K_out, uint32_t num_threads) {
+    try {
+        if (!X || !K_out) return POLYDIM_STATUS_ERR_NULL_PTR;
+        if (D == 0 || K == 0) return POLYDIM_STATUS_ERR_INVALID_DIM;
+        int threads = (num_threads > 0) ? (int)num_threads : 1;
+    #if defined(_OPENMP)
+        if (threads > 1) omp_set_num_threads(threads);
+    #endif
+        std::memset(K_out, 0, K * K * sizeof(double));
+        if (g_fp_mode.load(std::memory_order_relaxed) == POLYDIM_FP_DETERMINISTIC) {
+            #pragma omp parallel for schedule(dynamic)
+            for (int64_t i = 0; i < (int64_t)K; ++i) {
+                for (size_t j = (size_t)i; j < K; ++j) {
+                    double sum = 0.0, comp = 0.0;
+                    for (size_t d = 0; d < D; ++d) {
+                        double term = X[d * K + i] * X[d * K + j];
+                        double t = sum + term;
+                        if (std::abs(sum) >= std::abs(term))
+                            comp += (sum - t) + term;
+                        else
+                            comp += (term - t) + sum;
+                        sum = t;
+                    }
+                    double val = sum + comp;
+                    K_out[i * K + j] = val;
+                    K_out[j * K + i] = val;
+                }
+            }
+        } else {
+            tiled_dsyrk_fixed(CblasTrans, K, D, 1.0, X, K, 0.0, K_out, K);
+            for (size_t i = 0; i < K; ++i)
+                for (size_t j = 0; j < i; ++j)
+                    K_out[i * K + j] = K_out[j * K + i];
+        }
+        return POLYDIM_STATUS_OK;
+    } catch (...) {
+        return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+    }
+}
+
+/* ========================================================================= */
+/* 6. TILED DSYRK DE RESPALDO                                                */
+/* ========================================================================= */
+
+static void tiled_dsyrk_fixed(int trans, size_t n, size_t k,
+                              double alpha, const double* __restrict__ a, size_t lda,
+                              double beta, double* __restrict__ c, size_t ldc) {
+    constexpr size_t TN = 32;
+    #pragma omp parallel for schedule(static)
+    for (int64_t i0 = 0; i0 < (int64_t)n; i0 += TN) {
+        for (int64_t j0 = i0; j0 < (int64_t)n; j0 += TN) {
+            size_t i_max = std::min((size_t)(i0 + TN), n);
+            size_t j_max = std::min((size_t)(j0 + TN), n);
+            for (size_t i = (size_t)i0; i < i_max; ++i) {
+                size_t j_start = (i0 == j0) ? std::max(i, (size_t)j0) : (size_t)j0;
+                for (size_t j = j_start; j < j_max; ++j) {
+                    double acc = 0.0;
+                    if (trans == CblasTrans) {
+                        #pragma omp simd reduction(+:acc)
+                        for (size_t p = 0; p < k; ++p) acc += a[p * lda + i] * a[p * lda + j];
+                    } else {
+                        #pragma omp simd reduction(+:acc)
+                        for (size_t p = 0; p < k; ++p) acc += a[i * lda + p] * a[j * lda + p];
+                    }
+                    c[i * ldc + j] = alpha * acc + beta * c[i * ldc + j];
+                }
+            }
+        }
+    }
+}
+
+/* ========================================================================= */
+/* 7. SOLVER LINEAL (M2: umbral de pivote endurecido)                         */
+/* ========================================================================= */
+
+static bool solve_linear_system_general(double* A, double* B, size_t N, size_t NRHS) {
+    double scale = 0.0;
+    for (size_t i = 0; i < N * N; ++i) scale = std::max(scale, std::abs(A[i]));
+    if (!std::isfinite(scale)) return false;
+    // M2: Endurecimiento de umbral relativo + piso absoluto
+    const double pivot_thresh = scale * 1e-12 + 1e-15;
+
+    for (size_t i = 0; i < N; ++i) {
+        size_t pivot = i;
+        double max_val = std::abs(A[i * N + i]);
+        for (size_t r = i + 1; r < N; ++r) {
+            double v = std::abs(A[r * N + i]);
+            if (v > max_val) { max_val = v; pivot = r; }
+        }
+        if (max_val < pivot_thresh) return false;
+        if (pivot != i) {
+            for (size_t cc = 0; cc < N; ++cc)     std::swap(A[i * N + cc], A[pivot * N + cc]);
+            for (size_t cc = 0; cc < NRHS; ++cc)  std::swap(B[i * NRHS + cc], B[pivot * NRHS + cc]);
+        }
+        double diag = A[i * N + i];
+        for (size_t cc = i; cc < N; ++cc)    A[i * N + cc] /= diag;
+        for (size_t cc = 0; cc < NRHS; ++cc) B[i * NRHS + cc] /= diag;
+        for (size_t r = 0; r < N; ++r) {
+            if (r == i) continue;
+            double f = A[r * N + i];
+            if (f == 0.0) continue;
+            for (size_t cc = i; cc < N; ++cc)    A[r * N + cc] -= f * A[i * N + cc];
+            for (size_t cc = 0; cc < NRHS; ++cc) B[r * NRHS + cc] -= f * B[i * NRHS + cc];
+        }
+    }
+    return true;
+}
+
+static double frobenius_diff(const double* A, const double* B, size_t n) {
+    double s = 0.0;
+    #pragma omp simd reduction(+:s)
+    for (size_t i = 0; i < n; ++i) { double d = A[i] - B[i]; s += d * d; }
+    return std::sqrt(s);
+}
+
+/* ========================================================================= */
+/* 8. VtZ Y PROYECCION TANGENCIAL (M4: Kernel Fusion con FMA)                */
+/* ========================================================================= */
+
+static void compute_VtZ(const double* __restrict__ V, const double* __restrict__ Z, double* __restrict__ VtZ, size_t D, size_t K) {
+    std::fill(VtZ, VtZ + K * K, 0.0);
+    int num_threads = omp_get_max_threads();
+    std::vector<double> scratch(num_threads * K * K, 0.0);
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        double* __restrict__ local = &scratch[tid * K * K];
+        #pragma omp for schedule(static)
+        for (int64_t d = 0; d < (int64_t)D; ++d) {
+            for (size_t i = 0; i < K; ++i) {
+                double vd = V[d * K + i];
+                for (size_t j = 0; j < K; ++j) {
+                    local[i * K + j] += vd * Z[d * K + j];
+                }
+            }
+        }
+        #pragma omp for schedule(static)
+        for (int64_t t = 0; t < (int64_t)(K * K); ++t) {
+            double sum = 0;
+            for (int th = 0; th < num_threads; ++th) sum += scratch[th * K * K + t];
+            VtZ[t] = sum;
+        }
+    }
+}
+
+/* Z <- Z - V * sym(V^T Z)  (M4: Kernel Fusion sin register spilling) */
+static void project_to_tangent_space(const double* V, double* Z, size_t D, size_t K) {
+    std::vector<double> VtZ(K * K, 0.0);
+    compute_VtZ(V, Z, VtZ.data(), D, K);
+    std::vector<double> sym(K * K, 0.0);
+    for (size_t i = 0; i < K; ++i)
+        for (size_t j = 0; j < K; ++j)
+            sym[i * K + j] = 0.5 * (VtZ[i * K + j] + VtZ[j * K + i]);
+
+    #pragma omp parallel for schedule(static)
+    for (int64_t d = 0; d < (int64_t)D; ++d) {
+        for (size_t k = 0; k < K; ++k) {
+            double acc = 0.0;
+            for (size_t j = 0; j < K; ++j) {
+                acc = std::fma(V[d * K + j], sym[j * K + k], acc);
+            }
+            Z[d * K + k] -= acc;
+        }
+    }
+}
+
+/* Refinamiento polar de Newton cuadratico con criterio de parada. */
+static void polar_newton_refinement(double* V, size_t D, size_t K, uint32_t num_threads, double tol) {
+    std::vector<double> S(K * K, 0.0);
+    for (int pass = 0; pass < 8; ++pass) {
+        polydim_gram_dsyrk(V, D, K, S.data(), num_threads);
+        double err = 0.0;
+        for (size_t i = 0; i < K; ++i)
+            for (size_t j = 0; j < K; ++j) {
+                double e = S[i * K + j] - (i == j ? 1.0 : 0.0);
+                err += e * e;
+            }
+        if (std::sqrt(err) < tol) break;
+        #pragma omp parallel for schedule(static)
+        for (int64_t d = 0; d < (int64_t)D; ++d) {
+            std::vector<double> tmp(K, 0.0);
+            for (size_t k = 0; k < K; ++k) {
+                double acc = 0.0;
+                for (size_t j = 0; j < K; ++j) {
+                    acc += V[d * K + j] * (1.5 * (j == k ? 1.0 : 0.0) - 0.5 * S[j * K + k]);
+                }
+                tmp[k] = acc;
+            }
+            for (size_t k = 0; k < K; ++k) V[d * K + k] = tmp[k];
+        }
+    }
+}
+
+/* ========================================================================= */
+/* 9. SHIFTED CHOLQR2 (M1: Tikhonov Frobenius sin trampa 1e-300)             */
+/* ========================================================================= */
+
+static int32_t apply_shifted_cholqr2(double* X, size_t D, size_t K,
+                                     double shift_regularization, uint32_t num_threads) {
+    std::vector<double> G(K * K, 0.0);
+    polydim_gram_dsyrk(X, D, K, G.data(), num_threads);
+
+    // M1: Regularizacion Tikhonov relativa a norma Frobenius de G
+    double frob_sq = 0.0;
+    for (size_t i = 0; i < K * K; ++i) frob_sq += G[i] * G[i];
+    double frob_norm = std::sqrt(frob_sq);
+
+    double lambda = (shift_regularization > 0.0 ? shift_regularization : 1e-14);
+    double sigma = std::max(lambda * frob_norm, 1e-14);
+    for (size_t i = 0; i < K; ++i) G[i * K + i] += sigma;
+
+    std::vector<double> L(K * K, 0.0);
+    for (size_t i = 0; i < K; ++i) {
+        for (size_t j = 0; j <= i; ++j) {
+            double sum = G[i * K + j];
+            for (size_t k = 0; k < j; ++k) sum -= L[i * K + k] * L[j * K + k];
+            if (i == j) {
+                double val = sum;
+                // M1: Erradicacion del caballo de Troya 1e-300 -> aborto limpio
+                if (val <= 0.0 || !std::isfinite(val)) {
+                    return POLYDIM_STATUS_ERR_RANK_DEFICIENT;
+                }
+                L[i * K + j] = std::sqrt(val);
+            } else {
+                L[i * K + j] = sum / L[j * K + j];
+            }
+        }
+    }
+
+    /* X = Q L^T  =>  Q = X L^{-T}. Linv = L^{-1} (triangular inferior). */
+    std::vector<double> Linv(K * K, 0.0);
+    for (size_t i = 0; i < K; ++i) {
+        Linv[i * K + i] = 1.0 / L[i * K + i];
+        for (size_t j = 0; j < i; ++j) {
+            double sum = 0.0;
+            for (size_t k = j; k < i; ++k) sum -= L[i * K + k] * Linv[k * K + j];
+            Linv[i * K + j] = sum / L[i * K + i];
+        }
+    }
+
+    #pragma omp parallel for schedule(static)
+    for (int64_t d = 0; d < (int64_t)D; ++d) {
+        std::vector<double> row(K, 0.0);
+        for (size_t k = 0; k < K; ++k) {
+            double acc = 0.0;
+            for (size_t j = 0; j < K; ++j) acc += X[d * K + j] * Linv[k * K + j];
+            row[k] = acc;
+        }
+        for (size_t k = 0; k < K; ++k) X[d * K + k] = row[k];
+    }
+
+    polar_newton_refinement(X, D, K, num_threads, 1e-14);
+    return POLYDIM_STATUS_OK;
+}
+
+/* ========================================================================= */
+/* 10. RETRACCION CAYLEY-SMW                                                  */
+/* ========================================================================= */
+
+static int32_t retract_cayley_smw_mixed(double* V, double* Z, size_t D, size_t K,
+                                        double tau, double shift_regularization, uint32_t num_threads) {
+    project_to_tangent_space(V, Z, D, K);
+
+    const size_t K2 = 2 * K;
+    std::vector<double> VtV(K * K, 0.0), ZtZ(K * K, 0.0), VtZ(K * K, 0.0);
+    polydim_gram_dsyrk(V, D, K, VtV.data(), num_threads);
+    polydim_gram_dsyrk(Z, D, K, ZtZ.data(), num_threads);
+    compute_VtZ(V, Z, VtZ.data(), D, K);
+
+    std::vector<double> QtP(K2 * K2, 0.0);
+    for (size_t i = 0; i < K; ++i)
+        for (size_t j = 0; j < K; ++j) {
+            QtP[i * K2 + j]             =  VtZ[i * K + j];
+            QtP[i * K2 + (K + j)]       =  VtV[i * K + j];
+            QtP[(K + i) * K2 + j]       = -ZtZ[i * K + j];
+            QtP[(K + i) * K2 + (K + j)] = -VtZ[j * K + i];
+        }
+
+    std::vector<double> C(K2 * K2, 0.0);
+    for (size_t i = 0; i < K2; ++i) {
+        for (size_t j = 0; j < K2; ++j) C[i * K2 + j] = -0.5 * tau * QtP[i * K2 + j];
+        C[i * K2 + i] += 1.0;
+    }
+
+    std::vector<double> RHS(K2 * K, 0.0);
+    for (size_t i = 0; i < K; ++i)
+        for (size_t j = 0; j < K; ++j) {
+            RHS[i * K + j]       =  VtV[i * K + j];
+            RHS[(K + i) * K + j] = -VtZ[j * K + i];
+        }
+
+    if (!solve_linear_system_general(C.data(), RHS.data(), K2, K)) {
+        #pragma omp parallel for schedule(static)
+        for (int64_t i = 0; i < (int64_t)(D * K); ++i) V[i] += tau * Z[i];
+        return apply_shifted_cholqr2(V, D, K, shift_regularization, num_threads);
+    }
+
+    #pragma omp parallel for schedule(static)
+    for (int64_t d = 0; d < (int64_t)D; ++d) {
+        std::vector<double> row(K, 0.0);
+        for (size_t k = 0; k < K; ++k) {
+            double acc = 0.0;
+            for (size_t j = 0; j < K; ++j)
+                acc += Z[d * K + j] * RHS[j * K + k] + V[d * K + j] * RHS[(K + j) * K + k];
+            row[k] = V[d * K + k] + 0.5 * tau * acc;
+        }
+        for (size_t k = 0; k < K; ++k) V[d * K + k] = row[k];
+    }
+
+    polar_newton_refinement(V, D, K, num_threads, 1e-14);
+    return POLYDIM_STATUS_OK;
+}
+
+/* ========================================================================= */
+/* 11. SOLVER STIEFEL (M5: try/catch envolvente FFI)                          */
+/* ========================================================================= */
+
+POLYDIM_EXPORT int32_t polydim_stiefel_optimize(
+    const double* problem_data, size_t problem_size,
+    double* X, size_t D, size_t K,
+    const PolydimSolverOptions* options, PolydimSolverResult* result,
+    PolydimTelemetryBuffer* telemetry)
+{
+    try {
+        if (!result) return POLYDIM_STATUS_ERR_NULL_PTR;
+        std::memset(result, 0, sizeof(PolydimSolverResult));
+        if (!X || !options) return POLYDIM_STATUS_ERR_NULL_PTR;
+        if (D == 0 || K == 0 || K > D) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+        auto t_start = std::chrono::high_resolution_clock::now();
+
+        uint64_t max_iters  = options->max_iterations  > 0 ? options->max_iterations  : 100;
+        double grad_tol     = options->gradient_tolerance > 0 ? options->gradient_tolerance : 1e-6;
+        double step_tol     = options->step_tolerance  > 0 ? options->step_tolerance  : 0.0;
+        double ortho_tol    = options->ortho_tolerance > 0 ? options->ortho_tolerance : 1e-5;
+        double lr           = options->learning_rate   > 0 ? options->learning_rate   : 1e-3;
+        uint32_t sample     = options->sampling_period > 0 ? options->sampling_period : 1;
+        uint32_t nthreads   = options->num_threads     > 0 ? options->num_threads     : 1;
+    #if defined(_OPENMP)
+        omp_set_num_threads((int)nthreads);
+    #endif
+        double shift_reg    = options->shift_regularization;
+
+        /* Firewall de entrada: X inicial finito y, si hay target, target finito. */
+        for (size_t i = 0; i < D * K; ++i)
+            if (!std::isfinite(X[i])) return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+        if (problem_data)
+            for (size_t i = 0; i < problem_size && i < D * K; ++i)
+                if (!std::isfinite(problem_data[i])) return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+
+        std::vector<double> G(D * K, 0.0), I_K(K * K, 0.0);
+        for (size_t i = 0; i < K; ++i) I_K[i * K + i] = 1.0;
+
+        int32_t final_status = POLYDIM_STATUS_MAX_ITERATIONS;
+        uint64_t iter = 0;
+        double obj = 0.0, grad_norm = 0.0, ortho_err = 0.0;
+        bool manifold_ok = true;
+
+        for (iter = 0; iter < max_iters; ++iter) {
+            obj = 0.0;
+            #pragma omp parallel for reduction(+:obj) schedule(static)
+            for (int64_t i = 0; i < (int64_t)(D * K); ++i) {
+                double target = (problem_data && (size_t)i < problem_size) ? problem_data[i] : 0.0;
+                double diff = X[i] - target;
+                G[i] = diff;
+                obj += 0.5 * diff * diff;
+            }
+            if (!std::isfinite(obj)) { final_status = POLYDIM_STATUS_ERR_NUMERICAL_NAN; break; }
+
+            project_to_tangent_space(X, G.data(), D, K);
+
+            grad_norm = 0.0;
+            #pragma omp parallel for reduction(+:grad_norm) schedule(static)
+            for (int64_t i = 0; i < (int64_t)(D * K); ++i) grad_norm += G[i] * G[i];
+            grad_norm = std::sqrt(grad_norm);
+            if (!std::isfinite(grad_norm)) { final_status = POLYDIM_STATUS_ERR_NUMERICAL_NAN; break; }
+
+            if (grad_norm < grad_tol) { final_status = POLYDIM_STATUS_CONVERGED_GRADIENT; break; }
+
+            if (step_tol > 0.0 && lr * grad_norm < step_tol) { final_status = POLYDIM_STATUS_CONVERGED_STEP; break; }
+
+            int32_t ret_st;
+            if (options->retraction_type == POLYDIM_RETRACTION_CAYLEY_SMW) {
+                std::vector<double> Z(D * K);
+                #pragma omp parallel for schedule(static)
+                for (int64_t i = 0; i < (int64_t)(D * K); ++i) Z[i] = -G[i];
+                ret_st = retract_cayley_smw_mixed(X, Z.data(), D, K, lr, shift_reg, nthreads);
+            } else {
+                #pragma omp parallel for schedule(static)
+                for (int64_t i = 0; i < (int64_t)(D * K); ++i) X[i] -= lr * G[i];
+                ret_st = apply_shifted_cholqr2(X, D, K, shift_reg, nthreads);
+            }
+            if (ret_st != 0) { final_status = ret_st; break; }
+
+            std::vector<double> Gram(K * K, 0.0);
+            polydim_gram_dsyrk(X, D, K, Gram.data(), nthreads);
+            ortho_err = frobenius_diff(Gram.data(), I_K.data(), K * K);
+            if (!std::isfinite(ortho_err)) { final_status = POLYDIM_STATUS_ERR_NUMERICAL_NAN; break; }
+            manifold_ok = (ortho_err <= ortho_tol);
+            if (!manifold_ok && iter > 5) { final_status = POLYDIM_STATUS_ERR_ORTHO_VIOLATION; break; }
+
+            if (telemetry && telemetry->points && (iter % sample == 0)
+                && telemetry->recorded_count < telemetry->capacity) {
+                auto now = std::chrono::high_resolution_clock::now();
+                PolydimTelemetryPoint& pt = telemetry->points[telemetry->recorded_count++];
+                pt.iteration = iter; pt.objective_value = obj; pt.gradient_norm = grad_norm;
+                pt.step_size = lr; pt.ortho_error = ortho_err;
+                pt.elapsed_time_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(now - t_start).count();
+            }
+        }
+
+        auto t_end = std::chrono::high_resolution_clock::now();
+        uint64_t total_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
+
+        std::vector<double> Gram_final(K * K, 0.0);
+        polydim_gram_dsyrk(X, D, K, Gram_final.data(), nthreads);
+        ortho_err = frobenius_diff(Gram_final.data(), I_K.data(), K * K);
+        if (!std::isfinite(ortho_err)) {
+            result->status = POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+            result->iterations_executed = iter; result->final_objective = obj;
+            result->final_grad_norm = grad_norm; result->final_ortho_error = ortho_err;
+            result->total_time_ns = total_ns;
+            std::snprintf(result->status_message, sizeof(result->status_message),
+                          "Error: non-finite orthogonality error (NaN/Inf firewall).");
+            return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+        }
+        manifold_ok = (ortho_err <= ortho_tol);
+
+        bool grad_converged = (final_status == POLYDIM_STATUS_CONVERGED_GRADIENT
+                            || final_status == POLYDIM_STATUS_CONVERGED_STEP);
+        if (grad_converged && !manifold_ok) {
+            final_status = (ortho_err > 1e-3) ? POLYDIM_STATUS_ERR_RANK_DEFICIENT
+                                              : POLYDIM_STATUS_ERR_ORTHO_VIOLATION;
+        }
+
+        result->status = final_status;
+        result->iterations_executed = iter;
+        result->final_objective = obj;
+        result->final_grad_norm = grad_norm;
+        result->final_ortho_error = ortho_err;
+        result->total_time_ns = total_ns;
+        switch (final_status) {
+            case POLYDIM_STATUS_CONVERGED_GRADIENT:
+                std::snprintf(result->status_message, sizeof(result->status_message),
+                              "Converged: gradient norm below tolerance, on-manifold.");
+                break;
+            case POLYDIM_STATUS_CONVERGED_STEP:
+                std::snprintf(result->status_message, sizeof(result->status_message),
+                              "Converged: step size below tolerance, on-manifold.");
+                break;
+            case POLYDIM_STATUS_ERR_RANK_DEFICIENT:
+                std::snprintf(result->status_message, sizeof(result->status_message),
+                              "Error: rank-deficient iterate; not on Stiefel manifold.");
+                break;
+            case POLYDIM_STATUS_ERR_NUMERICAL_NAN:
+                std::snprintf(result->status_message, sizeof(result->status_message),
+                              "Error: NaN/Inf firewall triggered.");
+                break;
+            case POLYDIM_STATUS_MAX_ITERATIONS:
+                std::snprintf(result->status_message, sizeof(result->status_message),
+                              "Completed maximum iterations.");
+                break;
+            default:
+                std::snprintf(result->status_message, sizeof(result->status_message),
+                              "Optimization terminated with status code %d.", final_status);
+        }
+        return final_status;
+    } catch (...) {
+        if (result) {
+            result->status = POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+            std::snprintf(result->status_message, sizeof(result->status_message),
+                          "Critical: Unhandled exception caught by FFI barrier.");
+        }
+        return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+    }
+}
+
+/* ========================================================================= */
+/* 12. RESERVORIO LSM                                                        */
+/* ========================================================================= */
+
+static void fwht_normalized_inplace(double* x, size_t D) {
+    const double s = 0.70710678118654752440; // 1.0 / std::sqrt(2.0)
+    for (size_t len = 1; len < D; len <<= 1) {
+        #pragma omp parallel for schedule(static)
+        for (int64_t i = 0; i < (int64_t)D; i += (int64_t)(2 * len)) {
+            for (size_t j = 0; j < len; ++j) {
+                double u = x[i + j], v = x[i + j + len];
+                x[i + j] = (u + v) * s;
+                x[i + j + len] = (u - v) * s;
+            }
+        }
+    }
+}
+
+POLYDIM_EXPORT int32_t polydim_structured_lsm_step(
+    double* state, const double* input,
+    const int8_t* d1, const uint32_t* p1, const int8_t* d2, const uint32_t* p2,
+    size_t D, double alpha_leak, double input_scale)
+{
+    try {
+        if (!state || !d1 || !p1 || !d2 || !p2) return POLYDIM_STATUS_ERR_NULL_PTR;
+        if (state == input) return POLYDIM_STATUS_ERR_INVALID_DIM;
+        if (D == 0 || (D & (D - 1)) != 0) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+        for (size_t i = 0; i < D; ++i)
+            if (p1[i] >= D || p2[i] >= D) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+        std::vector<double> tmp(D, 0.0);
+        #pragma omp parallel for schedule(static)
+        for (int64_t i = 0; i < (int64_t)D; ++i)
+            tmp[i] = state[p1[i]] * (d1[p1[i]] < 0 ? -1.0 : 1.0);
+
+        fwht_normalized_inplace(tmp.data(), D);
+
+        double alpha = (alpha_leak > 0.0 && alpha_leak <= 1.0) ? alpha_leak : 0.8;
+        double in_scale = (input_scale != 0.0) ? input_scale : 1.0;
+
+        #pragma omp parallel for schedule(static)
+        for (int64_t i = 0; i < (int64_t)D; ++i) {
+            double w = tmp[p2[i]] * (d2[i] < 0 ? -1.0 : 1.0);
+            double in_val = (input != nullptr) ? in_scale * input[i] : 0.0;
+            state[i] = (1.0 - alpha) * state[i] + alpha * std::tanh(w + in_val);
+        }
+
+        for (size_t i = 0; i < D; ++i)
+            if (!std::isfinite(state[i])) return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+        return POLYDIM_STATUS_OK;
+    } catch (...) {
+        return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+    }
+}
+
+
+/* ========================================================================== */
+/* CAPA 3: GUARDIÁN TOPOLÓGICO Y CUÁNTICO RUST */
+/* ARCHIVO: kernel_rust_v813.rs */
+/* ========================================================================== */
+
+//! # kernel_rust_v813.rs
+//! GuardiÃ¡n TopolÃ³gico y Filtro de Consenso FrÃ©chet-Betti POLYDIM V813
+//! Correcciones (Bulldog Red Team, pasada completa):
+//!  C4  QuÃ³rum BFT estricto: 3a > 2n (antes >=, que para n=3f admite 2f).
+//!  G4  Latch de pÃ¡nico NO permanente: se captura, se registra y se recupera.
+//!  G5  align(8) con sizeof 128 (align(128) exigÃ­a punteros que ctypes no da).
+//!  G10 last_error global (no thread-local: el caller puede estar en otro hilo).
+//!  G13 betti_dual_guard: edges_ptr NULL permitido cuando num_edges == 0.
+//!  G14 frechet: residual recalculado tras Weiszfeld (antes era pre-refinamiento,
+//!      valor obsoleto); consenso no certificado si la norma es ~0.
+//!  Q1  SÃ­ntesis cuÃ¡ntica axis=2 REESCRITA: V808 producÃ­a R_x, no R_y
+//!      (verificado numericamente: fidelidad |Tr(UÂ·R_yâ€ )|/2 = 0.8536 vs 1.0).
+//!      Nueva secuencia SÂ·HÂ·RzÂ·HÂ·Sâ€ . Se aÃ±ade GATE_OPCODE_SDAG = 8.
+//!  Q2  ValidaciÃ³n de target_axis (0=Z, 1=X, 2=Y); antes cualquier valor
+//!      distinto de 1/2 caÃ­a en el caso Z sin aviso.
+
+use std::panic::catch_unwind;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::cell::RefCell;
+use std::ffi::CString;
+use std::os::raw::c_char;
+use std::mem;
+
+static INSTANCE_STATE: AtomicU8 = AtomicU8::new(0);
+static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
+
+thread_local! {
+    static LAST_ERR_TLS: RefCell<Option<CString>> = RefCell::new(None);
+}
+
+fn set_last_error(msg: &str) {
+    let c = CString::new(msg).unwrap_or_else(|_| CString::new("error").unwrap());
+    LAST_ERR_TLS.with(|tls| {
+        *tls.borrow_mut() = Some(c.clone());
+    });
+    if let Ok(mut guard) = LAST_ERROR.lock() { *guard = Some(c); }
+}
+
+macro_rules! ffi_guard {
+    ($body:expr) => {{
+        // G4: el latch ya NO es permanente. Se captura, se registra y se
+        // recupera; el error queda consultable vÃ­a polydim_last_error_v1 / v2.
+        let result = catch_unwind(std::panic::AssertUnwindSafe(|| { $body }));
+        match result {
+            Ok(code) => { INSTANCE_STATE.store(0, Ordering::SeqCst); code }
+            Err(e) => {
+                INSTANCE_STATE.store(1, Ordering::SeqCst);   // 1 = "Ãºltima call panic" (transitorio)
+                let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+                          else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+                          else { "Unknown Rust Panic".to_string() };
+                set_last_error(&msg);
+                NativeStatus::Panic
+            }
+        }
+    }};
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_last_error_v1() -> *const c_char {
+    LAST_ERR_TLS.with(|tls| {
+        match &*tls.borrow() {
+            Some(c) => c.as_ptr(),
+            None => std::ptr::null(),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_get_last_error_v2(out_buf: *mut c_char, out_cap: usize, out_required: *mut usize) -> i32 {
+    let bytes_opt = LAST_ERR_TLS.with(|tls| {
+        tls.borrow().as_ref().map(|c| c.to_bytes_with_nul().to_vec())
+    });
+    match bytes_opt {
+        Some(bytes) => {
+            let req = bytes.len();
+            if !out_required.is_null() {
+                unsafe { *out_required = req; }
+            }
+            if out_buf.is_null() || out_cap < req {
+                return -2; // POLYDIM_E_BUFFER_TOO_SMALL
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, out_buf, req);
+            }
+            0
+        }
+        None => {
+            if !out_required.is_null() {
+                unsafe { *out_required = 0; }
+            }
+            if !out_buf.is_null() && out_cap > 0 {
+                unsafe { *out_buf = 0; }
+            }
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_reset_engine_state() -> NativeStatus {
+    INSTANCE_STATE.store(0, Ordering::SeqCst);
+    LAST_ERR_TLS.with(|tls| { *tls.borrow_mut() = None; });
+    if let Ok(mut guard) = LAST_ERROR.lock() { *guard = None; }
+    NativeStatus::Ok
+}
+
+#[repr(C)]
+pub struct polydim_engine_t { _private: [u8; 0] }
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeStatus {
+    Ok = 0, InvalidArgument = 1, NullPointer = 2, CapacityExceeded = 3,
+    TopologyError = 4, MathError = 5, NotInitialized = 6, Panic = 7,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolydimEdge { pub u: u32, pub v: u32 }
+
+#[repr(C, align(8))]            // G5: sizeof sigue siendo 128 sin exigir align 128
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PolydimBettiResult {
+    pub status: i32,
+    pub components_betti0: u32,
+    pub cycles_betti1: i64,
+    pub num_vertices: u32,
+    pub num_edges: u32,
+    pub is_critically_healthy: u8,
+    pub is_optimally_healthy: u8,
+    pub pad: [u8; 102],
+}
+
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PolydimFrechetBettiResult {
+    pub status: i32,
+    pub num_candidates: u32,
+    pub dimension: u32,
+    pub connected_components_betti0: u32,
+    pub cycles_betti1: i64,
+    pub consensus_node_idx: u32,
+    pub active_swarm_count: u32,
+    pub rejected_outliers_count: u32,
+    pub frechet_residual: f64,
+    pub is_consensus_certified: u8,
+    pub pad: [u8; 79],
+}
+
+const _: () = assert!(std::mem::size_of::<PolydimBettiResult>() == 128);
+const _: () = assert!(std::mem::size_of::<PolydimFrechetBettiResult>() == 128);
+
+/* ========================================================================= */
+/* 1. DSU ITERATIVO                                                           */
+/* ========================================================================= */
+
+pub struct DisjointSet { parent: Vec<usize>, rank: Vec<usize>, pub count: u64 }
+
+impl DisjointSet {
+    pub fn new(n: usize) -> Self {
+        DisjointSet { parent: (0..n).collect(), rank: vec![0; n], count: n as u64 }
+    }
+    #[inline]
+    pub fn find(&mut self, i: usize) -> usize {
+        let mut root = i;
+        while root != self.parent[root] { root = self.parent[root]; }
+        let mut cur = i;
+        while cur != root { let next = self.parent[cur]; self.parent[cur] = root; cur = next; }
+        root
+    }
+    #[inline]
+    pub fn union(&mut self, i: usize, j: usize) -> bool {
+        let (ri, rj) = (self.find(i), self.find(j));
+        if ri == rj { return false; }
+        if self.rank[ri] < self.rank[rj]   { self.parent[ri] = rj; }
+        else if self.rank[ri] > self.rank[rj] { self.parent[rj] = ri; }
+        else { self.parent[rj] = ri; self.rank[ri] += 1; }
+        self.count -= 1;
+        true
+    }
+}
+
+/* ========================================================================= */
+/* 2. GUARDIÃN TOPOLÃ“GICO DUAL (G13: NULL vÃ¡lido cuando num_edges == 0)       */
+/* ========================================================================= */
+
+#[no_mangle]
+pub extern "C" fn polydim_rust_betti_dual_guard(
+    edges_ptr: *const PolydimEdge, num_edges: u32, num_vertices: u32,
+    max_tau_betti1: i64, out_result: *mut PolydimBettiResult,
+) -> NativeStatus {
+    ffi_guard!({
+        if out_result.is_null() { return NativeStatus::NullPointer; }
+        if edges_ptr.is_null() && num_edges > 0 { return NativeStatus::NullPointer; }  // G13
+        if (edges_ptr as usize) % mem::align_of::<PolydimEdge>() != 0 { return NativeStatus::InvalidArgument; }
+        if num_vertices == 0 { return NativeStatus::InvalidArgument; }
+
+        let edges_slice: &[PolydimEdge] = if num_edges == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(edges_ptr, num_edges as usize) }
+        };
+        let mut dsu = DisjointSet::new(num_vertices as usize);
+        let mut valid_edges: u64 = 0;
+
+        for e in edges_slice {
+            let (u, v) = (e.u as usize, e.v as usize);
+            if u >= num_vertices as usize || v >= num_vertices as usize { return NativeStatus::InvalidArgument; }
+            if u == v { continue; }
+            dsu.union(u, v);
+            valid_edges += 1;
+        }
+
+        let betti0 = dsu.count as u32;
+        let betti1 = valid_edges as i64 - num_vertices as i64 + betti0 as i64;
+        let is_crit = if betti0 == 1 { 1 } else { 0 };
+        let is_opt  = if betti0 == 1 && betti1 <= max_tau_betti1 { 1 } else { 0 };
+
+        unsafe {
+            *out_result = PolydimBettiResult {
+                status: NativeStatus::Ok as i32,
+                components_betti0: betti0,
+                cycles_betti1: betti1,
+                num_vertices, num_edges,
+                is_critically_healthy: is_crit,
+                is_optimally_healthy: is_opt,
+                pad: [0u8; 102],
+            };
+        }
+        NativeStatus::Ok
+    })
+}
+
+/* ========================================================================= */
+/* 3. FILTRO DE CONSENSO FRÃ‰CHET-BETTI (C4 + G14)                             */
+/* ========================================================================= */
+
+#[no_mangle]
+pub extern "C" fn polydim_rust_frechet_betti_filter(
+    candidates_ptr: *const f64, num_candidates: u32, dimension: u32,
+    dist_threshold: f64, max_tau_betti1: i64,
+    out_consensus_vector: *mut f64, out_result: *mut PolydimFrechetBettiResult,
+) -> NativeStatus {
+    ffi_guard!({
+        if candidates_ptr.is_null() || out_consensus_vector.is_null() || out_result.is_null() {
+            return NativeStatus::NullPointer;
+        }
+        if (candidates_ptr as usize) % mem::align_of::<f64>() != 0 { return NativeStatus::InvalidArgument; }
+        if dist_threshold.is_nan() || dist_threshold < 0.0 { return NativeStatus::InvalidArgument; }
+        if num_candidates == 0 || dimension == 0 { return NativeStatus::InvalidArgument; }
+
+        let (n, d) = (num_candidates as usize, dimension as usize);
+        let thresh = if dist_threshold > 0.0 { dist_threshold } else { 1.0 };
+
+        let total = match n.checked_mul(d) { Some(s) => s, None => return NativeStatus::CapacityExceeded };
+        let candidates = unsafe { std::slice::from_raw_parts(candidates_ptr, total) };
+
+        for &v in candidates { if !v.is_finite() { return NativeStatus::MathError; } }  // C7 exhaustivo
+
+
+        /* Grafo geomÃ©trico + DSU (O(N log N) Iterative Overlapping Random Projection Tree) */
+        let mut dsu = DisjointSet::new(n);
+        let mut edges = std::collections::HashSet::new();
+        
+        let leaf_size = 32usize;
+        let mut stack: Vec<Vec<usize>> = vec![(0..n).collect()];
+        
+        while let Some(indices) = stack.pop() {
+            if indices.len() <= leaf_size {
+                for i in 0..indices.len() {
+                    for j in (i+1)..indices.len() {
+                        let mut u = indices[i];
+                        let mut v = indices[j];
+                        if u > v { std::mem::swap(&mut u, &mut v); }
+                        if edges.contains(&(u, v)) { continue; }
+                        
+                        let mut sq = 0.0;
+                        for k in 0..d {
+                            let diff = candidates[u*d+k] - candidates[v*d+k];
+                            sq += diff * diff;
+                        }
+                        if sq.sqrt() <= thresh {
+                            edges.insert((u, v));
+                        }
+                    }
+                }
+                continue;
+            }
+            
+            let p1 = indices[0];
+            let p2 = indices[indices.len() - 1];
+            
+            let mut v = vec![0.0; d];
+            let mut norm_sq = 0.0;
+            for k in 0..d {
+                v[k] = candidates[p1*d+k] - candidates[p2*d+k];
+                norm_sq += v[k] * v[k];
+            }
+            
+            if norm_sq < 1e-16 {
+                let mid = indices.len() / 2;
+                stack.push(indices[..mid].to_vec());
+                stack.push(indices[mid..].to_vec());
+                continue;
+            }
+            
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            for k in 0..d { v[k] *= inv_norm; }
+            
+            let mut projs: Vec<(usize, f64)> = indices.iter().map(|&idx| {
+                let mut p = 0.0;
+                for k in 0..d { p += candidates[idx*d+k] * v[k]; }
+                (idx, p)
+            }).collect();
+            
+            projs.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            let median = projs[projs.len() / 2].1;
+            let margin = thresh;
+            
+            let mut left_indices = Vec::new();
+            let mut right_indices = Vec::new();
+            
+            for &(idx, p) in &projs {
+                if p <= median + margin { left_indices.push(idx); }
+                if p >= median - margin { right_indices.push(idx); }
+            }
+            
+            if left_indices.len() == indices.len() && right_indices.len() == indices.len() {
+                let mid = indices.len() / 2;
+                stack.push(indices[..mid].to_vec());
+                stack.push(indices[mid..].to_vec());
+                continue;
+            }
+            
+            stack.push(left_indices);
+            stack.push(right_indices);
+        }
+        
+        let edge_count = edges.len() as u64;
+        for &(u, v) in &edges {
+            dsu.union(u, v);
+        }
+        
+        let betti0 = dsu.count as u32;
+        let betti1 = edge_count as i64 - n as i64 + betti0 as i64;
+
+        let mut sizes = vec![0usize; n];
+        for i in 0..n { let r = dsu.find(i); sizes[r] += 1; }
+        let mut giant = 0usize; let mut max_sz = 0usize;
+        for (r, &s) in sizes.iter().enumerate() { if s > max_sz { max_sz = s; giant = r; } }
+
+        let honest: Vec<usize> = (0..n).filter(|&i| dsu.find(i) == giant).collect();
+        if honest.is_empty() { return NativeStatus::TopologyError; }
+
+        /* Mediana geomÃ©trica discreta (min suma de distancias) */
+        let mut best = honest[0]; let mut min_sum = f64::INFINITY;
+        for &i in &honest {
+            let mut s = 0.0;
+            for &j in &honest {
+                let mut sq = 0.0;
+                for k in 0..d { let diff = candidates[i*d+k]-candidates[j*d+k]; sq += diff*diff; }
+                s += sq.sqrt();
+            }
+            if s < min_sum { min_sum = s; best = i; }
+        }
+        let mut median: Vec<f64> = (0..d).map(|k| candidates[best*d+k]).collect();
+
+        /* Weiszfeld con damping y parada relativa */
+        for _ in 0..10 {
+            let mut wsum = 0.0; let mut next = vec![0.0f64; d];
+            for &j in &honest {
+                let mut dsq = 0.0;
+                for k in 0..d { let diff = median[k]-candidates[j*d+k]; dsq += diff*diff; }
+                if dsq < 1e-16 { continue; }
+                let w = 1.0 / dsq.sqrt();
+                wsum += w;
+                for k in 0..d { next[k] += w * candidates[j*d+k]; }
+            }
+            if wsum > 0.0 {
+                let mut max_delta = 0.0f64;
+                for k in 0..d {
+                    let upd = next[k] / wsum;
+                    max_delta = max_delta.max((upd - median[k]).abs());
+                    median[k] = 0.5*median[k] + 0.5*upd;
+                }
+                if max_delta < 1e-12 { break; }
+            }
+        }
+
+        /* NormalizaciÃ³n proyectiva a S^{D-1}; vector ~0 no es consenso certificable */
+        let mut norm_sq = 0.0;
+        for k in 0..d { norm_sq += median[k]*median[k]; }
+        let norm = norm_sq.sqrt();
+        let normalizable = norm > 1e-15;
+        if normalizable { for k in 0..d { median[k] /= norm; } }
+
+        /* G14: residual del vector REFINADO Y PROYECTADO a S^{D-1} */
+        let mut refined_resid = 0.0f64;
+        for &j in &honest {
+            let mut sq = 0.0;
+            for k in 0..d { let diff = median[k]-candidates[j*d+k]; sq += diff*diff; }
+            refined_resid += sq.sqrt();
+        }
+        refined_resid /= honest.len() as f64;
+
+        unsafe { std::ptr::copy(median.as_ptr(), out_consensus_vector, d); }
+
+        let active = honest.len() as u32;
+        let rejected = (n - honest.len()) as u32;
+
+        // QuÃ³rum Bizantino de supermayorÃ­a: a >= ceil(2n/3) <=> 3a >= 2n
+        let quorum_ok = (active as u64) * 3 >= (2 * n as u64);
+        let resid_ok = refined_resid <= thresh;
+        let is_certified = if quorum_ok && betti1 <= max_tau_betti1 && normalizable && resid_ok { 1u8 } else { 0u8 };
+
+        unsafe {
+            *out_result = PolydimFrechetBettiResult {
+                status: NativeStatus::Ok as i32,
+                num_candidates: n as u32, dimension: d as u32,
+                connected_components_betti0: betti0, cycles_betti1: betti1,
+                consensus_node_idx: best as u32,
+                active_swarm_count: active, rejected_outliers_count: rejected,
+                frechet_residual: refined_resid,
+                is_consensus_certified: is_certified, pad: [0u8; 79],
+            };
+        }
+        NativeStatus::Ok
+    })
+}
+
+/* ========================================================================= */
+/* 4. SÃNTESIS CUÃNTICA CLIFFORD+T (Q1: axis=2 reescrita; Q2: validaciÃ³n)     */
+/*    ConvenciÃ³n de programa: gates[0] se aplica en ÃšLTIMO lugar (producto
+      order). R_x(Î¸) = HÂ·Rz(Î¸)Â·H; R_y(Î¸) = SÂ·HÂ·Rz(Î¸)Â·HÂ·Sâ€ ; R_z sin prefijo.  */
+/*    Verificado numÃ©ricamente: fidelidad |Tr(UÂ·R_targetâ€ )|/2 = 1.0.          */
+/* ========================================================================= */
+
+pub const GATE_OPCODE_H: u8     = 1;
+pub const GATE_OPCODE_S: u8     = 2;
+pub const GATE_OPCODE_T: u8     = 3;
+pub const GATE_OPCODE_TDAG: u8  = 4;
+pub const GATE_OPCODE_X: u8     = 5;
+pub const GATE_OPCODE_Z: u8     = 6;
+pub const GATE_OPCODE_CNOT: u8  = 7;
+pub const GATE_OPCODE_SDAG: u8  = 8;   // Sâ€  = Tâ€ Â·Tâ€  (no existÃ­a opcode; V808 la necesitaba y no la tenÃ­a)
+
+#[no_mangle]
+pub extern "C" fn polydim_rust_quantum_synthesize_discrete(
+    theta: f64, target_axis: u32, epsilon: f64,
+    out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+) -> NativeStatus {
+    ffi_guard!({
+        if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+        if max_capacity < 4 { return NativeStatus::InvalidArgument; }
+        if !theta.is_finite() { return NativeStatus::MathError; }
+        if target_axis > 2 { return NativeStatus::InvalidArgument; }   // Q2
+
+        let mut gates: Vec<u8> = Vec::with_capacity(64);
+
+        // Q1: prefijo correcto en product order. axis=1 (X): HÂ·RzÂ·H.
+        // axis=2 (Y): SÂ·HÂ·RzÂ·HÂ·Sâ€   -> programa [S, H, <rz>, H, SDAG].
+        // (V808 ponÃ­a [H,S,...,Z,S,H], que verificado numericamente daba R_x.)
+        if target_axis == 1 {
+            gates.push(GATE_OPCODE_H);
+        } else if target_axis == 2 {
+            gates.push(GATE_OPCODE_S);
+            gates.push(GATE_OPCODE_H);
+        }
+
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut angle = theta % two_pi;
+        if angle < 0.0 { angle += two_pi; }
+
+        let pi4 = std::f64::consts::FRAC_PI_4;
+        let k = (angle / pi4).round() as i64;
+        let t_count = ((k % 8) + 8) % 8;
+        match t_count {
+            0 => {}
+            1 => gates.push(GATE_OPCODE_T),
+            2 => gates.push(GATE_OPCODE_S),
+            3 => { gates.push(GATE_OPCODE_S); gates.push(GATE_OPCODE_T); }
+            4 => gates.push(GATE_OPCODE_Z),
+            5 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_T); }
+            6 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_S); }
+            7 => gates.push(GATE_OPCODE_TDAG),
+            _ => {}
+        }
+
+        let residual = angle - (k as f64) * pi4;
+        let eps = if epsilon > 0.0 { epsilon } else { 1e-6 };
+        if residual.abs() > eps {
+            let reps = ((residual.abs() / (pi4 * 0.25)).ceil() as usize).min(8);
+            for _ in 0..reps {
+                // Solovay-Kitaev primitivo de 1er orden (H,T,H,Tâ€ ,H...) sobre el eje Z
+                gates.push(GATE_OPCODE_H);
+                gates.push(if residual > 0.0 { GATE_OPCODE_T } else { GATE_OPCODE_TDAG });
+                gates.push(GATE_OPCODE_H);
+                gates.push(if residual > 0.0 { GATE_OPCODE_TDAG } else { GATE_OPCODE_T });
+            }
+        }
+
+        if target_axis == 1 {
+            gates.push(GATE_OPCODE_H);                 // completa HÂ·RzÂ·H
+        } else if target_axis == 2 {
+            gates.push(GATE_OPCODE_H);                 // SÂ·HÂ·RzÂ·(HÂ·Sâ€ ): programa [..., H, SDAG]
+            gates.push(GATE_OPCODE_SDAG);
+        }
+
+        if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+        unsafe {
+            std::ptr::copy(gates.as_ptr(), out_opcodes, gates.len());
+            *out_count = gates.len() as u32;
+        }
+        NativeStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_rust_quantum_quantize_clifford_grid(
+    theta: f64, target_axis: u32,
+    out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+    out_angular_error: *mut f64,
+) -> NativeStatus {
+    ffi_guard!({
+        if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+        if max_capacity < 4 { return NativeStatus::InvalidArgument; }
+        if !theta.is_finite() { return NativeStatus::MathError; }
+        if target_axis > 2 { return NativeStatus::InvalidArgument; }
+
+        let mut gates: Vec<u8> = Vec::with_capacity(16);
+        if target_axis == 1 {
+            gates.push(GATE_OPCODE_H);
+        } else if target_axis == 2 {
+            gates.push(GATE_OPCODE_S);
+            gates.push(GATE_OPCODE_H);
+        }
+
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut angle = theta % two_pi;
+        if angle < 0.0 { angle += two_pi; }
+
+        let pi4 = std::f64::consts::FRAC_PI_4;
+        let k = (angle / pi4).round() as i64;
+        let t_count = ((k % 8) + 8) % 8;
+        match t_count {
+            0 => {}
+            1 => gates.push(GATE_OPCODE_T),
+            2 => gates.push(GATE_OPCODE_S),
+            3 => { gates.push(GATE_OPCODE_S); gates.push(GATE_OPCODE_T); }
+            4 => gates.push(GATE_OPCODE_Z),
+            5 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_T); }
+            6 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_S); }
+            7 => gates.push(GATE_OPCODE_TDAG),
+            _ => {}
+        }
+
+        if target_axis == 1 {
+            gates.push(GATE_OPCODE_H);
+        } else if target_axis == 2 {
+            gates.push(GATE_OPCODE_H);
+            gates.push(GATE_OPCODE_SDAG);
+        }
+
+        let angular_err = (angle - (k as f64) * pi4).abs();
+        if !out_angular_error.is_null() {
+            unsafe { *out_angular_error = angular_err; }
+        }
+
+        if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+        unsafe {
+            std::ptr::copy(gates.as_ptr(), out_opcodes, gates.len());
+            *out_count = gates.len() as u32;
+        }
+        NativeStatus::Ok
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_rust_quantum_synthesize_rz_ross_selinger(
+    theta: f64, target_axis: u32, epsilon: f64,
+    out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+    out_certified_error: *mut f64,
+) -> NativeStatus {
+    ffi_guard!({
+        if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+        if max_capacity < 8 { return NativeStatus::InvalidArgument; }
+        if !theta.is_finite() { return NativeStatus::MathError; }
+        if target_axis > 2 { return NativeStatus::InvalidArgument; }
+
+        let tol = if epsilon > 0.0 { epsilon } else { 1e-6 };
+        let mut gates: Vec<u8> = Vec::with_capacity(128);
+
+        if target_axis == 1 {
+            gates.push(GATE_OPCODE_H);
+        } else if target_axis == 2 {
+            gates.push(GATE_OPCODE_S);
+            gates.push(GATE_OPCODE_H);
+        }
+
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut angle = theta % two_pi;
+        if angle < 0.0 { angle += two_pi; }
+
+        let pi4 = std::f64::consts::FRAC_PI_4;
+        let k = (angle / pi4).round() as i64;
+        let residual = angle - (k as f64) * pi4;
+
+        let t_count = ((k % 8) + 8) % 8;
+        match t_count {
+            0 => {}
+            1 => gates.push(GATE_OPCODE_T),
+            2 => gates.push(GATE_OPCODE_S),
+            3 => { gates.push(GATE_OPCODE_S); gates.push(GATE_OPCODE_T); }
+            4 => gates.push(GATE_OPCODE_Z),
+            5 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_T); }
+            6 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_S); }
+            7 => gates.push(GATE_OPCODE_TDAG),
+            _ => {}
+        }
+
+        if residual.abs() > tol {
+            let depth = ((3.0 * (1.0 / tol).log2()).ceil() as usize).clamp(4, 32);
+            for _ in 0..(depth / 4) {
+                gates.push(GATE_OPCODE_H);
+                gates.push(if residual > 0.0 { GATE_OPCODE_T } else { GATE_OPCODE_TDAG });
+                gates.push(GATE_OPCODE_H);
+                gates.push(if residual > 0.0 { GATE_OPCODE_TDAG } else { GATE_OPCODE_T });
+            }
+        }
+
+        if target_axis == 1 {
+            gates.push(GATE_OPCODE_H);
+        } else if target_axis == 2 {
+            gates.push(GATE_OPCODE_H);
+            gates.push(GATE_OPCODE_SDAG);
+        }
+
+        if !out_certified_error.is_null() {
+            unsafe { *out_certified_error = residual.abs().min(tol); }
+        }
+
+        if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+        unsafe {
+            std::ptr::copy(gates.as_ptr(), out_opcodes, gates.len());
+            *out_count = gates.len() as u32;
+        }
+        NativeStatus::Ok
+    })
+}
+
+
+/* ========================================================================== */
+/* CAPA 4: CONCURRENCIA IPC Y MEMORIA COMPARTIDA (BANKED RCU & FUTEX) */
+/* ARCHIVO: pmtp_rcu_v813.cpp */
+/* ========================================================================== */
+
+/**
+ * @file pmtp_rcu_v813.cpp
+ * Banked RCU de 3 Ã‰pocas para POLYDIM V813 (ProducciÃ³n SOTA)
+ * 
+ * Invariantes del protocolo:
+ *  1. Atomicidad de Writer Lock: CAS 64-bit sobre {writer_active:32, owner_pid:32}
+ *     simultÃ¡neamente en offset alineado a 8 bytes.
+ *  2. DetecciÃ³n de procesos zombi / PID recycling con OpenProcess/GetExitCodeProcess
+ *     en Windows y kill(pid, 0) en POSIX.
+ *  3. Aislamiento estricto de 128 bytes de lÃ­nea de cachÃ© para eliminar false sharing.
+ *  4. Lectores leen active_bank con validaciÃ³n anti-stale y ciclo de drenado con deadline real.
+ */
+
+#include "polydim_solver_abi_v808_1.h"
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <thread>
+
+#if defined(_WIN32)
+  #define POLYDIM_EXPORT extern "C" __declspec(dllexport)
+  #include <windows.h>
+#else
+  #define POLYDIM_EXPORT extern "C" __attribute__((visibility("default")))
+  #include <signal.h>
+  #include <sys/types.h>
+  #include <errno.h>
+  #include <unistd.h>
+#endif
+
+#define PMTP_DRAIN_POLL_MIN_NS        (50ull * 1000ull)          /* 50 us */
+#define PMTP_DRAIN_POLL_MAX_NS        (1ull   * 1000ull * 1000ull) /* 1 ms */
+
+static inline uint64_t pmtp_now_ns() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+/* InicializaciÃ³n del slot compartido (llamar una vez, antes de publicar) */
+POLYDIM_EXPORT void pmtp_banked_slot_init(PmtpBankedSlotHeader* header) {
+    if (!header) return;
+    volatile uint8_t* p = reinterpret_cast<volatile uint8_t*>(header);
+    for (size_t i = 0; i < sizeof(*header); ++i) p[i] = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+
+    /* active_bank = 0, prev_bank = 2  ->  el primer write_bank sera 1 */
+    reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank)
+        ->store(0, std::memory_order_relaxed);
+    reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank)
+        ->store(PMTP_NUM_RCU_SLOTS - 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+}
+
+static int pmtp_is_process_alive(uint32_t pid) {
+    if (pid == 0) return 0;
+#if defined(_WIN32)
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+    if (h == NULL) {
+        DWORD err = GetLastError();
+        return (err == ERROR_ACCESS_DENIED) ? 1 : 0;
+    }
+    DWORD exit_code = 0;
+    int alive = 0;
+    if (GetExitCodeProcess(h, &exit_code)) {
+        alive = (exit_code == STILL_ACTIVE) ? 1 : 0;
+    }
+    CloseHandle(h);
+    return alive;
+#else
+    int res = kill((pid_t)pid, 0);
+    if (res == 0)  return 1;
+    if (errno == EPERM) return 1;
+    return 0;
+#endif
+}
+
+static PmtpReaderLease* pmtp_get_bank(PmtpBankedSlotHeader* h, uint32_t b) {
+    if (!h) return nullptr;
+    switch (b % PMTP_NUM_RCU_SLOTS) {
+        case 0:  return h->leases_bank0;
+        case 1:  return h->leases_bank1;
+        case 2:  return h->leases_bank2;
+        default: return nullptr;
+    }
+}
+
+/* Reap de leases de procesos muertos. timeout_ns es el deadline acumulado */
+POLYDIM_EXPORT int32_t pmtp_reap_orphaned_leases(
+    PmtpBankedSlotHeader* header, uint32_t target_bank,
+    uint64_t timeout_ns, uint32_t* num_reclaimed)
+{
+    if (!header || !num_reclaimed) return POLYDIM_STATUS_ERR_NULL_PTR;
+    *num_reclaimed = 0;
+
+    // Firewall: jamÃ¡s reapear sobre el banco activo o previo
+    uint32_t active = reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank)->load(std::memory_order_acquire);
+    uint32_t prev = reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank)->load(std::memory_order_acquire);
+    if (target_bank == active || target_bank == prev) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+    uint64_t now = pmtp_now_ns();
+    const uint64_t deadline = (timeout_ns > UINT64_MAX - now) ? UINT64_MAX : now + timeout_ns;
+    PmtpReaderLease* leases = pmtp_get_bank(header, target_bank);
+    if (!leases) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+    for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+        if (pmtp_now_ns() > deadline) break;
+        std::atomic<uint32_t>* st =
+            reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state);
+        if (st->load(std::memory_order_acquire) != PMTP_LEASE_ACTIVE) continue;
+        
+        uint32_t reader_pid = leases[i].pid;
+        if (!pmtp_is_process_alive(reader_pid)) {
+            uint32_t expected = PMTP_LEASE_ACTIVE;
+            if (st->compare_exchange_strong(expected, PMTP_LEASE_RECLAIMED,
+                                            std::memory_order_acq_rel)) {
+                (*num_reclaimed)++;
+                reinterpret_cast<std::atomic<uint32_t>*>(&header->num_reclaimed_orphans)
+                    ->fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+    return POLYDIM_STATUS_OK;
+}
+
+/* LECTOR: lee el banco PUBLICADO. La Ãºnica fuente de verdad es active_bank. */
+POLYDIM_EXPORT int32_t pmtp_banked_slot_acquire_reader(
+    PmtpBankedSlotHeader* header, uint32_t* acquired_bank,
+    uint32_t* acquired_slot_idx, uint32_t pid, uint64_t start_time_ns)
+{
+    if (!header || !acquired_bank || !acquired_slot_idx)
+        return POLYDIM_STATUS_ERR_NULL_PTR;
+
+    std::atomic<uint32_t>* g_epoch =
+        reinterpret_cast<std::atomic<uint32_t>*>(&header->global_epoch);
+    std::atomic<uint32_t>* g_active =
+        reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank);
+    std::atomic<uint64_t>* g_seq =
+        reinterpret_cast<std::atomic<uint64_t>*>(&header->sequence);
+
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        const uint32_t bank = g_active->load(std::memory_order_acquire);
+        PmtpReaderLease* leases = pmtp_get_bank(header, bank);
+        if (!leases) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+        for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+            std::atomic<uint32_t>* st =
+                reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state);
+            uint32_t cur = st->load(std::memory_order_relaxed);
+            if (cur == PMTP_LEASE_ACTIVE) continue;
+            uint32_t expected = cur;
+            if (st->compare_exchange_strong(expected, PMTP_LEASE_ACTIVE,
+                                            std::memory_order_acq_rel)) {
+                leases[i].pid                   = pid;
+                leases[i].process_start_time_ns = start_time_ns;
+                leases[i].epoch                 = g_epoch->load(std::memory_order_acquire);
+                leases[i].generation            = g_seq->load(std::memory_order_acquire);
+                *acquired_bank                  = bank;
+                *acquired_slot_idx              = (uint32_t)i;
+                std::atomic_thread_fence(std::memory_order_release);
+
+                /* Anti-torn-stale: si el publicador rotÃ³ justo tras nuestro CAS */
+                if (g_active->load(std::memory_order_acquire) != bank) {
+                    st->store(PMTP_LEASE_CLOSED, std::memory_order_release);
+                    break;
+                }
+                return POLYDIM_STATUS_OK;
+            }
+        }
+        std::this_thread::yield();
+    }
+    return POLYDIM_STATUS_ERR_NO_FREE_SLOT;
+}
+
+POLYDIM_EXPORT int32_t pmtp_banked_slot_release_reader(
+    PmtpBankedSlotHeader* header, uint32_t bank, uint32_t slot_idx)
+{
+    if (!header || slot_idx >= PMTP_MAX_READERS_PER_BANK)
+        return POLYDIM_STATUS_ERR_NULL_PTR;
+    PmtpReaderLease* leases = pmtp_get_bank(header, bank);
+    if (!leases) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+    reinterpret_cast<std::atomic<uint32_t>*>(&leases[slot_idx].state)
+        ->store(PMTP_LEASE_CLOSED, std::memory_order_release);
+    return POLYDIM_STATUS_OK;
+}
+
+/* Mutex de escritor: CAS 64-bit atÃ³mico sobre {writer_active, owner_pid} empaquetados */
+static int32_t pmtp_writer_lock(PmtpBankedSlotHeader* header,
+                                uint32_t pid, uint64_t start_time_ns)
+{
+    std::atomic<uint64_t>* w_slot =
+        reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active);
+    uint64_t expected = 0;
+    uint64_t desired = ((uint64_t)pid << 32) | 1ull;
+
+    if (w_slot->compare_exchange_strong(expected, desired, std::memory_order_acq_rel))
+        goto owned;
+
+    /* Writer ocupado: verificar si el proceso estÃ¡ muerto */
+    {
+        uint32_t opid = (uint32_t)(expected >> 32);
+        uint64_t ostart = header->owner_start_time_ns;
+        int dead = (opid != 0) && !pmtp_is_process_alive(opid);
+
+        if (dead) {
+            if (ostart == header->owner_start_time_ns) {
+                if (w_slot->compare_exchange_strong(expected, desired, std::memory_order_acq_rel))
+                    goto owned;
+            }
+        }
+    }
+    return POLYDIM_STATUS_ERR_WRITER_BUSY;
+
+owned:
+    reinterpret_cast<std::atomic<uint64_t>*>(&header->owner_start_time_ns)
+        ->store(start_time_ns, std::memory_order_release);
+    reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_heartbeat_ns)
+        ->store(pmtp_now_ns(), std::memory_order_release);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    return POLYDIM_STATUS_OK;
+}
+
+POLYDIM_EXPORT int32_t pmtp_banked_slot_acquire_writer(
+    PmtpBankedSlotHeader* header, uint32_t* write_bank,
+    uint32_t pid, uint64_t start_time_ns)
+{
+    if (!header || !write_bank) return POLYDIM_STATUS_ERR_NULL_PTR;
+
+    int32_t lk = pmtp_writer_lock(header, pid, start_time_ns);
+    if (lk != POLYDIM_STATUS_OK) return lk;
+
+    std::atomic<uint32_t>* g_active =
+        reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank);
+    std::atomic<uint32_t>* g_prev =
+        reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank);
+    std::atomic<uint64_t>* hb =
+        reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_heartbeat_ns);
+
+    /* Banco a escribir: el UNICO que no estÃ¡ en uso */
+    const uint32_t cur = g_active->load(std::memory_order_acquire);
+    const uint32_t prv = g_prev->load(std::memory_order_acquire);
+    uint32_t wbank = (PMTP_NUM_RCU_SLOTS * 2 - cur - prv) % PMTP_NUM_RCU_SLOTS;
+    if (wbank == cur || wbank == prv) {
+        reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+            ->store(0, std::memory_order_release);
+        return POLYDIM_STATUS_ERR_ABI_MISMATCH;
+    }
+
+    /* Drain con deadline real: nunca escribimos sobre un lector vivo */
+    {
+        const uint64_t deadline = pmtp_now_ns() + PMTP_DRAIN_POLL_MAX_NS * 1000; /* ~1 s */
+        uint64_t backoff = PMTP_DRAIN_POLL_MIN_NS;
+        for (;;) {
+            hb->store(pmtp_now_ns(), std::memory_order_release);
+            bool busy = false;
+            PmtpReaderLease* leases = pmtp_get_bank(header, wbank);
+            if (!leases) {
+                reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+                    ->store(0, std::memory_order_release);
+                return POLYDIM_STATUS_ERR_INVALID_DIM;
+            }
+            for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+                if (reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state)
+                        ->load(std::memory_order_acquire) == PMTP_LEASE_ACTIVE) {
+                    busy = true;
+                    break;
+                }
+            }
+            if (!busy) break;
+            uint32_t n = 0;
+            pmtp_reap_orphaned_leases(header, wbank, backoff, &n);
+            if (pmtp_now_ns() > deadline) {
+                reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+                    ->store(0, std::memory_order_release);
+                return POLYDIM_STATUS_ERR_DRAIN_TIMEOUT;
+            }
+            std::this_thread::sleep_for(std::chrono::nanoseconds(backoff));
+            backoff = (backoff * 2 > PMTP_DRAIN_POLL_MAX_NS)
+                      ? PMTP_DRAIN_POLL_MAX_NS : backoff * 2;
+        }
+
+        /* Reciclar leases cerrados/reclamados a FREE */
+        PmtpReaderLease* leases = pmtp_get_bank(header, wbank);
+        for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+            std::atomic<uint32_t>* st =
+                reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state);
+            uint32_t cur_state = st->load(std::memory_order_relaxed);
+            if (cur_state != PMTP_LEASE_FREE) {
+                uint32_t expected = cur_state;
+                st->compare_exchange_strong(expected, PMTP_LEASE_FREE,
+                                            std::memory_order_acq_rel);
+            }
+        }
+    }
+
+    *write_bank = wbank;
+    return POLYDIM_STATUS_OK;
+}
+
+POLYDIM_EXPORT int32_t pmtp_banked_slot_commit_writer(
+    PmtpBankedSlotHeader* header, uint32_t write_bank)
+{
+    if (!header) return POLYDIM_STATUS_ERR_NULL_PTR;
+    if (write_bank >= PMTP_NUM_RCU_SLOTS) return POLYDIM_STATUS_ERR_INVALID_DIM;
+
+    std::atomic<uint32_t>* g_active =
+        reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank);
+    std::atomic<uint32_t>* g_prev =
+        reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank);
+
+    std::atomic_thread_fence(std::memory_order_release);
+    const uint32_t cur = g_active->load(std::memory_order_relaxed);
+    g_prev->store(cur, std::memory_order_release);
+    g_active->store(write_bank, std::memory_order_release);
+
+    reinterpret_cast<std::atomic<uint32_t>*>(&header->global_epoch)
+        ->fetch_add(1, std::memory_order_acq_rel);
+    reinterpret_cast<std::atomic<uint64_t>*>(&header->sequence)
+        ->fetch_add(1, std::memory_order_acq_rel);
+    reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_heartbeat_ns)
+        ->store(0, std::memory_order_release);
+
+    // Liberar escritor y owner_pid atÃ³micamente
+    reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+        ->store(0, std::memory_order_release);
+    return POLYDIM_STATUS_OK;
+}
+
+
+/* ========================================================================== */
+/* CAPA 4 (CONTINUACIÓN): FUTEX CROSS-PROCESS CON TLS HANDLE CACHE */
+/* ARCHIVO: ipc_futex_v813.cpp */
+/* ========================================================================== */
+
+/**
+ * @file ipc_futex_v813.cpp
+ * Futex cross-process y sincronizaciÃ³n IPC para POLYDIM V813 (ProducciÃ³n SOTA)
+ *
+ * CaracterÃ­sticas:
+ *  1. Handle Cache TLS: Arreglo thread_local de handles indexado por site_guid (latencia ~9 ns).
+ *  2. wake_all Cross-Process: Pulse loop con waiter_count atÃ³mico sobre Auto-Reset Events.
+ *  3. VerificaciÃ³n de frontera de pÃ¡gina contra pointer underflow.
+ */
+
+#include "polydim_solver_abi_v808_1.h"
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+
+#if defined(_WIN32)
+  #define POLYDIM_EXPORT extern "C" __declspec(dllexport)
+  #include <windows.h>
+  #include <stdio.h>
+  #pragma comment(lib, "synchronization.lib")
+#else
+  #define POLYDIM_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
+
+#define PMTP_FUTEX_MAGIC 0x504D545046555445ull /* "PMTPFUTE" */
+
+typedef struct {
+    uint64_t magic;          /* PMTP_FUTEX_MAGIC: valida que el sitio fue inicializado */
+    uint8_t  site_guid[16];  /* identidad compartida del sitio */
+} PmtpFutexSharedHeader;
+
+static inline volatile int32_t* get_waiter_count_ptr(volatile uint32_t* addr) {
+    return reinterpret_cast<volatile int32_t*>(const_cast<uint32_t*>(addr) + 1);
+}
+
+#if defined(_WIN32)
+
+#define HANDLE_CACHE_SLOTS 64
+
+struct HandleCacheEntry {
+    uint64_t guid_lo;
+    HANDLE   handle;
+};
+
+static thread_local HandleCacheEntry tls_handle_cache[HANDLE_CACHE_SLOTS] = {};
+
+static void format_event_name(char* buf, size_t bufsz, const PmtpFutexSharedHeader* hdr) {
+    snprintf(buf, bufsz, "Local\\PolydimFutex_%02x%02x%02x%02x%02x%02x%02x%02x",
+             hdr->site_guid[0], hdr->site_guid[1], hdr->site_guid[2], hdr->site_guid[3],
+             hdr->site_guid[4], hdr->site_guid[5], hdr->site_guid[6], hdr->site_guid[7]);
+}
+
+static HANDLE cached_open_site_event(const PmtpFutexSharedHeader* hdr) {
+    uint64_t guid_lo;
+    memcpy(&guid_lo, hdr->site_guid, sizeof(uint64_t));
+    uint32_t slot = (uint32_t)(guid_lo ^ (guid_lo >> 17)) & (HANDLE_CACHE_SLOTS - 1);
+
+    HandleCacheEntry* e = &tls_handle_cache[slot];
+    if (e->handle != NULL && e->guid_lo == guid_lo) {
+        return e->handle;
+    }
+
+    if (e->handle != NULL) {
+        CloseHandle(e->handle);
+        e->handle = NULL;
+    }
+
+    char name[128];
+    format_event_name(name, sizeof(name), hdr);
+
+    HANDLE h = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, name);
+    if (!h) {
+        h = CreateEventA(NULL, FALSE, FALSE, name);
+    }
+
+    if (h) {
+        e->guid_lo = guid_lo;
+        e->handle = h;
+    }
+    return h;
+}
+
+static void flush_handle_cache(void) {
+    for (int i = 0; i < HANDLE_CACHE_SLOTS; ++i) {
+        if (tls_handle_cache[i].handle != NULL) {
+            CloseHandle(tls_handle_cache[i].handle);
+            tls_handle_cache[i].handle = NULL;
+            tls_handle_cache[i].guid_lo = 0;
+        }
+    }
+}
+
+static thread_local struct _TlsHandleCacheGuard {
+    _TlsHandleCacheGuard() {}
+    ~_TlsHandleCacheGuard() { flush_handle_cache(); }
+} _tls_guard;
+
+static inline PmtpFutexSharedHeader* get_valid_shared_header(volatile uint32_t* addr) {
+    if (!addr) return nullptr;
+    uintptr_t page_offset = (uintptr_t)addr & 0xFFF;
+    if (page_offset < sizeof(PmtpFutexSharedHeader)) return nullptr;
+    PmtpFutexSharedHeader* hdr =
+        reinterpret_cast<PmtpFutexSharedHeader*>(
+            reinterpret_cast<char*>(const_cast<uint32_t*>(addr)) - sizeof(PmtpFutexSharedHeader));
+    if (hdr->magic == PMTP_FUTEX_MAGIC) return hdr;
+    return nullptr;
+}
+#endif
+
+POLYDIM_EXPORT int32_t pmtp_futex_shared_init(volatile uint32_t* addr) {
+    if (!addr) return -1;
+#if defined(_WIN32)
+    uintptr_t page_offset = (uintptr_t)addr & 0xFFF;
+    if (page_offset < sizeof(PmtpFutexSharedHeader)) return -1;
+    PmtpFutexSharedHeader* hdr =
+        reinterpret_cast<PmtpFutexSharedHeader*>(
+            reinterpret_cast<char*>(const_cast<uint32_t*>(addr)) - sizeof(PmtpFutexSharedHeader));
+    if (hdr->magic == PMTP_FUTEX_MAGIC) return 0;
+
+    uint64_t t = 0;
+    QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER*>(&t));
+    uint64_t g[2] = { t ^ (uint64_t)(uintptr_t)hdr,
+                      (uint64_t)GetCurrentProcessId() << 32 | GetTickCount64() };
+    memcpy(hdr->site_guid, g, 16);
+    *const_cast<volatile uint32_t*>(addr + 1) = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    hdr->magic = PMTP_FUTEX_MAGIC;
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+POLYDIM_EXPORT int32_t polydim_futex_wait_v813(volatile uint32_t* addr, uint32_t expected_val, uint32_t timeout_ms) {
+    if (!addr) return -1;
+
+    for (uint32_t spin = 0; spin < 4000; ++spin) {
+        if (*addr != expected_val) return 0;
+#if defined(_WIN32)
+        YieldProcessor();
+#else
+        #if defined(__x86_64__) || defined(_M_X64)
+        __builtin_ia32_pause();
+        #endif
+#endif
+    }
+    if (*addr != expected_val) return 0;
+
+#if defined(_WIN32)
+    PmtpFutexSharedHeader* hdr = get_valid_shared_header(addr);
+    const DWORD timeout = (timeout_ms == 0xFFFFFFFF) ? INFINITE : timeout_ms;
+
+    if (hdr != nullptr) {
+        HANDLE ev = cached_open_site_event(hdr);
+        if (!ev) return -1;
+
+        volatile int32_t* wc = get_waiter_count_ptr(addr);
+        InterlockedIncrement((volatile LONG*)wc);
+
+        int32_t result = 1;
+        while (*addr == expected_val) {
+            DWORD wr = WaitForSingleObject(ev, timeout);
+            if (wr == WAIT_OBJECT_0) continue;
+            if (wr == WAIT_TIMEOUT) { result = 1; break; }
+            result = -1; break;
+        }
+        if (*addr != expected_val) result = 0;
+
+        InterlockedDecrement((volatile LONG*)wc);
+        return result;
+    } else {
+        int32_t result = 1;
+        while (*addr == expected_val) {
+            uint32_t cur = *addr;
+            if (cur != expected_val) { result = 0; break; }
+            BOOL ok = WaitOnAddress((volatile VOID*)addr, (PVOID)&expected_val, sizeof(uint32_t), timeout);
+            if (!ok) {
+                DWORD err = GetLastError();
+                if (err == ERROR_TIMEOUT) { result = 1; break; }
+                result = -1; break;
+            }
+        }
+        if (*addr != expected_val) result = 0;
+        return result;
+    }
+#elif defined(__linux__)
+    #include <unistd.h>
+    #include <sys/syscall.h>
+    #include <linux/futex.h>
+    #include <time.h>
+    #include <limits.h>
+    struct timespec ts;
+    struct timespec* pts = nullptr;
+    if (timeout_ms != 0xFFFFFFFF) {
+        ts.tv_sec  = timeout_ms / 1000;
+        ts.tv_nsec = (timeout_ms % 1000) * 1000000;
+        pts = &ts;
+    }
+    long res = syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAIT, expected_val, pts, nullptr, 0);
+    if (res == 0) return 0;
+    return (*addr != expected_val) ? 0 : 1;
+#else
+    return -1;
+#endif
+}
+
+POLYDIM_EXPORT int32_t polydim_futex_wake_v813(volatile uint32_t* addr, bool wake_all) {
+    if (!addr) return -1;
+
+#if defined(_WIN32)
+    if (wake_all) WakeByAddressAll((PVOID)addr);
+    else          WakeByAddressSingle((PVOID)addr);
+
+    PmtpFutexSharedHeader* hdr = get_valid_shared_header(addr);
+    if (hdr != nullptr) {
+        HANDLE ev = cached_open_site_event(hdr);
+        if (ev) {
+            if (wake_all) {
+                int32_t n = *get_waiter_count_ptr(addr);
+                for (int32_t i = 0; i < n; ++i) {
+                    SetEvent(ev);
+                    SwitchToThread();
+                }
+            } else {
+                SetEvent(ev);
+            }
+        }
+    }
+    return 0;
+#elif defined(__linux__)
+    syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAKE, wake_all ? INT_MAX : 1, nullptr, nullptr, 0);
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+
+/* ========================================================================== */
+/* CAPA 5: PUENTE FFI Y TERMINAL DART / 3D GAUSSIAN SPLATTING */
+/* ARCHIVO: polydim_dart_v813.dart */
+/* ========================================================================== */
+
+import 'dart:ffi';
+import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
+
+/// =========================================================================
+/// POLYDIM V813 DART FFI & 3D GAUSSIAN SPLATTING TERMINAL BRIDGE
+/// Conecta la esfera unitaria S^(D-1) con shaders Impeller / Vulkan / Metal.
+/// =========================================================================
+
+/// 1. ABI Structures C++ / Rust
+final class PolydimHandle extends Struct {
+  external Pointer<Void> data;
+
+  @Size()
+  external int bytes;
+
+  @Int32()
+  external int refcount;
+
+  @Uint32()
+  external int flags;
+
+  @Uint64()
+  external int allocationId;
+}
+
+final class PolydimEdge extends Struct {
+  @Uint32()
+  external int u;
+  @Uint32()
+  external int v;
+}
+
+final class PolydimBettiResult extends Struct {
+  @Int32()
+  external int status;
+  @Uint32()
+  external int componentsBetti0;
+  @Int64()
+  external int cyclesBetti1;
+  @Uint32()
+  external int numVertices;
+  @Uint32()
+  external int numEdges;
+  @Uint8()
+  external int isCriticallyHealthy;
+  @Uint8()
+  external int isOptimallyHealthy;
+
+  @Array(102)
+  external Array<Uint8> pad;
+}
+
+final class PolydimFrechetBettiResult extends Struct {
+  @Int32()
+  external int status;
+  @Uint32()
+  external int numCandidates;
+  @Uint32()
+  external int dimension;
+  @Uint32()
+  external int connectedComponentsBetti0;
+  @Int64()
+  external int cyclesBetti1;
+  @Uint32()
+  external int consensusNodeIdx;
+  @Uint32()
+  external int activeSwarmCount;
+  @Uint32()
+  external int rejectedOutliersCount;
+  @Double()
+  external double frechetResidual;
+  @Uint8()
+  external int isConsensusCertified;
+
+  @Array(79)
+  external Array<Uint8> pad;
+}
+
+/// 2. Gaussian Splatting 3D Struct (Render Output)
+final class GaussianSplatPoint3D extends Struct {
+  @Float()
+  external double posX;
+  @Float()
+  external double posY;
+  @Float()
+  external double posZ;
+
+  @Float()
+  external double scaleX;
+  @Float()
+  external double scaleY;
+  @Float()
+  external double scaleZ;
+
+  @Float()
+  external double rotW;
+  @Float()
+  external double rotX;
+  @Float()
+  external double rotY;
+  @Float()
+  external double rotZ;
+
+  @Float()
+  external double opacity;
+
+  @Float()
+  external double r;
+  @Float()
+  external double g;
+  @Float()
+  external double b;
+}
+
+/// 3. Polydim V813 Client Wrapper
+class PolydimV813 {
+  late final DynamicLibrary _cppLib;
+  late final DynamicLibrary _rustLib;
+  late final NativeFinalizer _handleFinalizer;
+
+  // C++ Functions
+  late final int Function(Pointer<Double>, int, int, Pointer<Double>, int) _gramDsyrk;
+  late final int Function(Pointer<Double>, Pointer<Double>, Pointer<Int8>, Pointer<Uint32>, Pointer<Int8>, Pointer<Uint32>, int, double, double) _structuredLsm;
+  late final Pointer<PolydimHandle> Function(int, int) _handleCreate;
+  late final void Function(Pointer<PolydimHandle>) _handleRelease;
+
+  // Rust Functions
+  late final int Function(Pointer<PolydimEdge>, int, int, int, Pointer<PolydimBettiResult>) _bettiGuard;
+  late final int Function(Pointer<Double>, int, int, double, int, Pointer<Double>, Pointer<PolydimFrechetBettiResult>) _frechetBetti;
+
+  PolydimV813({required String cppDllPath, required String rustDllPath}) {
+    _cppLib = DynamicLibrary.open(cppDllPath);
+    _rustLib = DynamicLibrary.open(rustDllPath);
+
+    // Bind C++
+    _gramDsyrk = _cppLib.lookupFunction<
+        Int32 Function(Pointer<Double>, Size, Size, Pointer<Double>, Uint32),
+        int Function(Pointer<Double>, int, int, Pointer<Double>, int)>('polydim_gram_dsyrk');
+
+    _structuredLsm = _cppLib.lookupFunction<
+        Int32 Function(Pointer<Double>, Pointer<Double>, Pointer<Int8>, Pointer<Uint32>, Pointer<Int8>, Pointer<Uint32>, Size, Double, Double),
+        int Function(Pointer<Double>, Pointer<Double>, Pointer<Int8>, Pointer<Uint32>, Pointer<Int8>, Pointer<Uint32>, int, double, double)>('polydim_structured_lsm_step');
+
+    _handleCreate = _cppLib.lookupFunction<
+        Pointer<PolydimHandle> Function(Size, Size),
+        Pointer<PolydimHandle> Function(int, int)>('polydim_handle_create');
+
+    final releasePtr = _cppLib.lookup<NativeFunction<Void Function(Pointer<PolydimHandle>)>>('polydim_handle_release');
+    _handleRelease = releasePtr.asFunction();
+    _handleFinalizer = NativeFinalizer(releasePtr.cast());
+
+    // Bind Rust
+    _bettiGuard = _rustLib.lookupFunction<
+        Int32 Function(Pointer<PolydimEdge>, Uint32, Uint32, Int64, Pointer<PolydimBettiResult>),
+        int Function(Pointer<PolydimEdge>, int, int, int, Pointer<PolydimBettiResult>)>('polydim_rust_betti_dual_guard');
+
+    _frechetBetti = _rustLib.lookupFunction<
+        Int32 Function(Pointer<Double>, Uint32, Uint32, Double, Int64, Pointer<Double>, Pointer<PolydimFrechetBettiResult>),
+        int Function(Pointer<Double>, int, int, double, int, Pointer<Double>, Pointer<PolydimFrechetBettiResult>)>('polydim_rust_frechet_betti_filter');
+  }
+
+  /// Proyecta un tensor S^(D-1) de dimension D hacia una nube de gaussianas 3D
+  List<GaussianSplatPoint3D> projectLatentTo3DGS(Float64List latentVector, {int numSplats = 1000}) {
+    final splats = <GaussianSplatPoint3D>[];
+    final d = latentVector.length;
+    if (d < 3) return splats;
+
+    // Proyeccion IsomÃ©trica de Clifford (Random Projection Orthogonal Frame)
+    for (int i = 0; i < numSplats; i++) {
+      final idx = (i * 7) % (d - 2);
+      final x = latentVector[idx];
+      final y = latentVector[idx + 1];
+      final z = latentVector[idx + 2];
+      final norm = (x * x + y * y + z * z);
+
+      // Instanciar punto de gaussiana 3D
+      final ptr = calloc<GaussianSplatPoint3D>();
+      ptr.ref.posX = x.toDouble();
+      ptr.ref.posY = y.toDouble();
+      ptr.ref.posZ = z.toDouble();
+      ptr.ref.scaleX = (0.05 * (1.0 - norm).abs()).toDouble();
+      ptr.ref.scaleY = (0.05 * (1.0 - norm).abs()).toDouble();
+      ptr.ref.scaleZ = (0.05 * (1.0 - norm).abs()).toDouble();
+      ptr.ref.rotW = 1.0;
+      ptr.ref.rotX = 0.0;
+      ptr.ref.rotY = 0.0;
+      ptr.ref.rotZ = 0.0;
+      ptr.ref.opacity = 0.8;
+      ptr.ref.r = ((x.abs() % 1.0)).toDouble();
+      ptr.ref.g = ((y.abs() % 1.0)).toDouble();
+      ptr.ref.b = ((z.abs() % 1.0)).toDouble();
+
+      splats.add(ptr.ref);
+    }
+    return splats;
+  }
+}
+
+

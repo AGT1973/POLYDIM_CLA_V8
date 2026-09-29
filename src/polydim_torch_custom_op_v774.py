@@ -93,7 +93,7 @@ def stiefel_project(X: torch.Tensor, shift: float = 1e-12) -> torch.Tensor:
     # Pass 2: Refinement CholQR (Machine precision orthogonalization)
     Gram2 = torch.matmul(X1.transpose(-2, -1), X1)
     Gram2_sym = 0.5 * (Gram2 + Gram2.transpose(-2, -1))
-    Gram2_reg = Gram2_sym + 1e-15 * eye
+    Gram2_reg = Gram2_sym + torch.finfo(Gram2_sym.dtype).eps * eye
     L2 = torch.linalg.cholesky(Gram2_reg)
     X2_t = torch.linalg.solve_triangular(L2, X1.transpose(-2, -1), upper=False)
     X2 = X2_t.transpose(-2, -1)

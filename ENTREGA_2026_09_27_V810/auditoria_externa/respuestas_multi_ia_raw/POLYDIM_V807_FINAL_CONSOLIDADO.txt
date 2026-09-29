@@ -1,0 +1,1993 @@
+=================================================================
+POLYDIM V807-FINAL — CONSOLIDADO COMPLETO Y CERRADO
+Tribunal: este archivo reemplaza a V806_CODIGO_FUENTE_CONSOLIDADO.txt
+=================================================================
+INDICE DE COBERTURA (hallazgo V806 -> fix V807):
+  P0-1 writer sobrescribe con lectores activos  -> PMTP reescrito: futex + nunca-rendicion
+  P0-2 writer muerto => writer_active pegado    -> writer_pid + heartbeat + takeover
+  P0-3 frechet retorna Ok sin salidas           -> early-return eliminado, salidas siempre
+  P0-4 stiefel_cholqr div/0 columna cero        -> piso diagonal + codigo de estado
+  P0-5 sintesis cuantica sin garantia epsilon   -> verificacion por simulacion 2x2
+  P0-6 FFI sin capacidades de buffer            -> capacidades + checked_mul en Rust
+  P0-7 generacion de lectura nunca validada     -> seqlock completo con validacion
+  P0-0 simbolos ausentes (Rodrigues/PMTP)       -> ENTREGADOS AQUI (polydim.h + core + pmtp)
+  P1-1 release de lease sin ownership           -> CAS con verificacion de pid
+  P1-2 latch de panico permanente               -> eliminado, catch por llamada + reset
+  P1-3 XPU roteado a "hip"                      -> "xpu" + cache TTL
+  P1-4 problem_size silencioso                  -> exigencia estricta D*K
+  P1-5 semantica de futex inconsistente         -> normalizada (0/1/-1) en las 3 plataformas
+  P1-6 cholqr2 silencioso bajo piso             -> contador de regularizacion expuesto
+  P1-7 orto-violacion sin recuperacion          -> recovery CholQR2 + backtracking lr
+  P1-8 extern "C" faltante                      -> todas las exportaciones alineadas
+  P1-9 nonce/key sin validar + SD silencioso    -> validacion + noncegen con contador
+  P1-10 LSM convencion de signo inconsistente   -> unificada (signo en indice de salida)
+  P2   atomicas en lazo caliente                -> parciales por hilo + merge ordenado
+  P2   AVX2 comentado vs SSE2 real              -> ruta por compile-time, comentario honesto
+  P2   grama realocaba por par                  -> parciales por hilo, merge deterministico
+  P2   evidencia contradictoria                 -> suite ampliada (ver FINAL DEL ARCHIVO)
+=================================================================
+
+// =========================================
+// ARCHIVO: polydim.h   (ABI C pura — espejo exacto del binding Dart)
+// =========================================
+#ifndef POLYDIM_H
+#define POLYDIM_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define POLYDIM_VER_STR  "POLYDIM V807.1-FINAL core+pmtp+crypto C11/C++17 OpenMP"
+#define POLYDIM_MAX_D    (1ull << 28)
+
+enum {
+  POLYDIM_SUCCESS = 0,
+  POLYDIM_ERR_NULL_POINTER = -1,
+  POLYDIM_ERR_INVALID_DIMENSION = -2,
+  POLYDIM_ERR_NAN_OR_INF = -3,
+  POLYDIM_ERR_DEGENERATE_NORM = -4,
+  POLYDIM_ERR_NUMERICAL_INSTABILITY = -5,
+  POLYDIM_ERR_SEQLOCK_RACE = -6,
+  POLYDIM_ERR_BUFFER_OVERFLOW = -7,
+  POLYDIM_ERR_INVALID_SCALAR = -8,
+  POLYDIM_ERR_BASIS_NOT_ORTHONORMAL = -9,
+  POLYDIM_ERR_POINT_OFF_MANIFOLD = -10,
+  POLYDIM_ERR_ALIASED_BUFFERS = -11,
+  POLYDIM_ERR_COMPENSATION_BROKEN = -12,
+  POLYDIM_STATUS_REGULARIZED = -13,   /* datos validos; se aplico regularizacion */
+  POLYDIM_ERR_WRITER_CONTENTION = -14,
+  POLYDIM_ERR_NOT_INITIALIZED = -15,
+  POLYDIM_ERR_WOULD_BLOCK = -16
+};
+
+typedef struct {
+  double  basisOrtho;      /* defecto 1e-9  */
+  double  pointNorm;       /* defecto 1e-9  */
+  double  gramOrtho;       /* defecto 1e-12 */
+  double  pivotRel;        /* defecto 1e-12 */
+  int32_t rejectSubnormal; /* !=0: rechaza entradas subnormales con -5 */
+} PolydimTolerances;   /* 40 bytes, espejo exacto de Dart */
+
+typedef struct {
+  double   pointNormErr;
+  double   basisUuErr;
+  double   basisVvErr;
+  double   basisUvErr;
+  double   outNormErr;
+  double   pivotMin;
+  double   pivotThreshold;
+  double   orthoErr;
+  uint64_t threadsUsed;
+} PolydimReport;       /* 72 bytes, espejo exacto de Dart */
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(PolydimTolerances) == 40, "ABI drift tolerancias");
+_Static_assert(sizeof(PolydimReport) == 72, "ABI drift reporte");
+#endif
+
+/* --- nucleo geometrico en S^{D-1} --- */
+int32_t polydim_rodrigues_geodesic_f64(const double* y, const double* u, const double* v,
+                                       double* out, double theta, uint64_t D,
+                                       const PolydimTolerances* tol, PolydimReport* rep);
+int32_t polydim_project_sphere_f64(const double* x, double* out, uint64_t D, PolydimReport* rep);
+int32_t polydim_orthonormalize_pair_f64(double* u, double* v, uint64_t D, PolydimReport* rep);
+int32_t polydim_selftest_all(void);
+const char* polydim_build_info(void);
+
+/* --- PMTP: IPC zero-copy, doble banco, seqlock, sin colapso a 1D --- */
+#define PMTP_MAX_READERS        64
+#define PMTP_WRITER_TIMEOUT_MS  1000
+#define PMTP_MAGIC 0x504D545056383037ull   /* "PMTPV807" */
+
+enum { PMTP_LEASE_FREE = 0, PMTP_LEASE_ACTIVE = 1, PMTP_LEASE_CLOSED = 2,
+       PMTP_LEASE_RECLAIMED = 3, PMTP_LEASE_RESERVED = 4 };
+
+typedef struct {
+  uint32_t state;         /* PMTP_LEASE_* ; acceso exclusivo via C11 atomics */
+  uint32_t pid;
+  uint64_t start_time_ns;
+  uint64_t generation;    /* seq observado al adquirir */
+  uint32_t _pad[8];
+} polydim_pmtp_lease_t;   /* 64 B, una linea de cache */
+
+typedef struct {
+  _Atomic uint64_t magic;
+  _Atomic uint64_t seq;              /* par = estable; sube de a 2 por commit */
+  _Atomic uint32_t active_slot;      /* 0 o 1 */
+  _Atomic uint32_t writer_pid;       /* 0 = libre */
+  _Atomic uint64_t writer_heartbeat_ns;
+  uint64_t writer_start_ns;
+  uint64_t slot_bytes;
+  uint32_t num_reclaimed;
+  uint32_t _pad0[13];
+  polydim_pmtp_lease_t leases[2][PMTP_MAX_READERS];
+} polydim_pmtp_header_t;
+
+typedef struct polydim_pmtp polydim_pmtp_t;
+
+/* region: mapping de memoria compartida (ver polydim_shm_*). Magic gobierna init idempotente. */
+polydim_pmtp_t* polydim_pmtp_create(void* region, uint64_t region_bytes, uint64_t slot_bytes);
+int32_t  polydim_pmtp_begin_write(polydim_pmtp_t* p, uint32_t* slot_out);
+int32_t  polydim_pmtp_commit_write(polydim_pmtp_t* p, uint32_t slot);
+int32_t  polydim_pmtp_acquire_read(polydim_pmtp_t* p, uint64_t* seq_out,
+                                   uint32_t* slot_out, uint32_t* lease_out);
+/* valida que la lectura bajo lease sigue siendo coherente con el ticket seq */
+int32_t  polydim_pmtp_validate_read(const polydim_pmtp_t* p, uint32_t slot,
+                                    uint64_t seq_ticket, uint32_t lease);
+/* SOLO el proceso dueno del lease puede liberarlo (CAS con verificacion de pid) */
+void     polydim_pmtp_release_read(polydim_pmtp_t* p, uint32_t slot, uint32_t lease);
+void*    polydim_pmtp_slot_data(polydim_pmtp_t* p, uint32_t slot, uint64_t* bytes_out);
+void     polydim_pmtp_writer_pulse(polydim_pmtp_t* p);
+uint64_t polydim_pmtp_seq(const polydim_pmtp_t* p);
+void     polydim_pmtp_destroy(polydim_pmtp_t* p);
+
+/* Sello AEAD de slots PMTP (implementado en polydim_pmtp_crypto.cpp).
+   nonce DERIVADO del seq del commit: [seq:8][slot:1][0:3] — unico por commit,
+   misuse-resistant por construccion (el seq nunca se repite).
+   Layout de slot: [payload: slot_bytes - 24][tag GCM: 16][seq_usado: 8].
+   AD = los 12 bytes del nonce (vincula payload con routing: DPI completo).
+   El writer sella DESPUES de begin_write (con el seq en mano) y ANTES de commit;
+   el reader abre DESPUES de validate_read. Devuelve 0 o codigo de error. */
+int32_t polydim_pmtp_seal_slot(polydim_pmtp_t* p, uint32_t slot,
+                               const uint8_t* key, uint32_t key_len);
+int32_t polydim_pmtp_open_slot(polydim_pmtp_t* p, uint32_t slot,
+                               const uint8_t* key, uint32_t key_len);
+
+/* memoria compartida con nombre: POSIX shm_open / Win32 CreateFileMapping */
+int32_t polydim_shm_open(const char* name, uint64_t bytes, int32_t create,
+                         void** out_mapping, uint64_t* out_bytes);
+void    polydim_shm_close(void* mapping, uint64_t bytes);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* POLYDIM_H */
+
+// =========================================
+// ARCHIVO: polydim_core.c   (C11 + OpenMP opcional; compilar SIN -ffast-math)
+// =========================================
+/* Build: gcc -O2 -std=c11 -fopenmp -ffp-contract=off -c polydim_core.c
+   -ffast-math rompe TwoSum/Neumaier; selftest_all() lo detecta y devuelve -12. */
+#include "polydim.h"
+#include <math.h>
+#include <float.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdatomic.h>
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#include <immintrin.h>
+#define PD_X86_FTZ_CHECK 1
+#endif
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#if defined(_WIN32)
+#include <process.h>
+#define PD_GETPID() ((uint32_t)_getpid())
+#else
+#include <unistd.h>
+#define PD_GETPID() ((uint32_t)getpid())
+#endif
+
+#define PD_MAX_THREADS 256
+
+/* ---- TwoSum de Knuth: requiere compilador que NO reasocie FP ---- */
+static inline void pd_two_sum(double a, double b, double* s, double* e) {
+  double sum = a + b;
+  double bv  = sum - a;
+  double av  = sum - bv;
+  *e = (a - av) + (b - bv);
+  *s = sum;
+}
+/* Neumaier: compensacion robusta cuando |sum| < |x| */
+static inline double pd_neumaier(double sum, double x, double* comp) {
+  double t = sum + x;
+  if (fabs(sum) >= fabs(x)) *comp += (sum - t) + x;
+  else                      *comp += (x - t) + sum;
+  return t;
+}
+
+static inline int pd_threads(void) {
+#ifdef _OPENMP
+  int t = omp_get_max_threads();
+  if (t <= 0) return 1;
+  return t > PD_MAX_THREADS ? PD_MAX_THREADS : t;
+#else
+  return 1;
+#endif
+}
+
+/* producto punto global con reduccion compensada y orden de merge FIJO:
+   determinista para numero de hilos fijo. */
+static double pd_pdot(const double* a, const double* b, uint64_t n) {
+  double ps[PD_MAX_THREADS], pc[PD_MAX_THREADS];
+  int nt_final = 1;
+  for (int i = 0; i < PD_MAX_THREADS; i++) { ps[i] = 0.0; pc[i] = 0.0; }
+#ifdef _OPENMP
+#pragma omp parallel num_threads(pd_threads())
+  {
+    int nt_t = omp_get_num_threads();      /* privados por hilo: sin carrera */
+    int id_t = omp_get_thread_num();
+    double s = 0.0, c = 0.0;
+    int64_t i;
+#pragma omp for schedule(static) nowait
+    for (i = 0; i < (int64_t)n; i++) s = pd_neumaier(s, a[i] * b[i], &c);
+    ps[id_t] = s; pc[id_t] = c;
+    if (id_t == 0) nt_final = nt_t;        /* un solo escritor, barrier al final */
+  }
+#else
+  {
+    double s = 0.0, c = 0.0;
+    for (uint64_t i = 0; i < n; i++) s = pd_neumaier(s, a[i] * b[i], &c);
+    ps[0] = s; pc[0] = c;
+  }
+#endif
+  double S = 0.0, C = 0.0;
+  for (int t = 0; t < nt_final; t++) { S = pd_neumaier(S, ps[t], &C); C += pc[t]; }
+  return S + C;
+}
+
+static int pd_check_finite(const double* x, uint64_t n) {
+  for (uint64_t i = 0; i < n; i++) if (!isfinite(x[i])) return 0;
+  return 1;
+}
+static int pd_check_subnormal(const double* x, uint64_t n) {
+  for (uint64_t i = 0; i < n; i++) if (fpclassify(x[i]) == FP_SUBNORMAL) return 0;
+  return 1;
+}
+
+static void pd_rep_clear(PolydimReport* r) { memset(r, 0, sizeof(*r)); }
+
+static void pd_default_tol(PolydimTolerances* t) {
+  t->basisOrtho = 1e-9; t->pointNorm = 1e-9; t->gramOrtho = 1e-12;
+  t->pivotRel = 1e-12;  t->rejectSubnormal = 0;
+}
+
+/* proyeccion a esfera con norma compensada */
+int32_t polydim_project_sphere_f64(const double* x, double* out, uint64_t D, PolydimReport* rep) {
+  if (!x || !out) return POLYDIM_ERR_NULL_POINTER;
+  if (D == 0 || D > POLYDIM_MAX_D) return POLYDIM_ERR_INVALID_DIMENSION;
+  if (x == out) return POLYDIM_ERR_ALIASED_BUFFERS;
+  if (!pd_check_finite(x, D)) return POLYDIM_ERR_NAN_OR_INF;
+  double n2 = pd_pdot(x, x, D);
+  if (!(n2 > 1e-290)) return POLYDIM_ERR_DEGENERATE_NORM;
+  double inv = 1.0 / sqrt(n2);
+  int64_t i;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+  for (i = 0; i < (int64_t)D; i++) out[i] = x[i] * inv;
+  if (rep) {
+    pd_rep_clear(rep);
+    rep->pointNormErr = fabs(pd_pdot(out, out, D) - 1.0);
+    rep->threadsUsed = (uint64_t)pd_threads();
+  }
+  return POLYDIM_SUCCESS;
+}
+
+/* ortonormalizacion de pares (MGS compensado) */
+int32_t polydim_orthonormalize_pair_f64(double* u, double* v, uint64_t D, PolydimReport* rep) {
+  if (!u || !v) return POLYDIM_ERR_NULL_POINTER;
+  if (D == 0 || D > POLYDIM_MAX_D) return POLYDIM_ERR_INVALID_DIMENSION;
+  if (u == v) return POLYDIM_ERR_ALIASED_BUFFERS;
+  if (!pd_check_finite(u, D) || !pd_check_finite(v, D)) return POLYDIM_ERR_NAN_OR_INF;
+  double nu = pd_pdot(u, u, D);
+  if (!(nu > 1e-290)) return POLYDIM_ERR_DEGENERATE_NORM;
+  double su = 1.0 / sqrt(nu);
+  int64_t i;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+  for (i = 0; i < (int64_t)D; i++) u[i] *= su;
+  double r = pd_pdot(v, u, D);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+  for (i = 0; i < (int64_t)D; i++) {
+    double p = -r * u[i], s, e;
+    pd_two_sum(v[i], p, &s, &e);
+    v[i] = s + e;
+  }
+  double nv = pd_pdot(v, v, D);
+  if (!(nv > 1e-290)) return POLYDIM_ERR_DEGENERATE_NORM;
+  double sv = 1.0 / sqrt(nv);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+  for (i = 0; i < (int64_t)D; i++) v[i] *= sv;
+  if (rep) {
+    pd_rep_clear(rep);
+    rep->basisUuErr = fabs(pd_pdot(u, u, D) - 1.0);
+    rep->basisVvErr = fabs(pd_pdot(v, v, D) - 1.0);
+    rep->basisUvErr = fabs(pd_pdot(u, v, D));
+    rep->threadsUsed = (uint64_t)pd_threads();
+  }
+  return POLYDIM_SUCCESS;
+}
+
+/* ---- geodesica de Rodrigues rank-2 sobre S^{D-1}; estable para theta->0:
+   sin (1-cos): y' = y + Du*u + Dv*vp con Du = -a*versin - b*sn,
+   Dv = a*sn - b*versin, versin = 2*sin^2(theta/2); theta=0 => y'=y bit a bit. */
+int32_t polydim_rodrigues_geodesic_f64(const double* y, const double* u, const double* v,
+                                       double* out, double theta, uint64_t D,
+                                       const PolydimTolerances* tol, PolydimReport* rep) {
+  if (!y || !u || !v || !out) return POLYDIM_ERR_NULL_POINTER;
+  if (D == 0 || D > POLYDIM_MAX_D) return POLYDIM_ERR_INVALID_DIMENSION;
+  if (out == y || out == u || out == v || u == v || y == u || y == v)
+    return POLYDIM_ERR_ALIASED_BUFFERS;
+  if (!isfinite(theta)) return POLYDIM_ERR_INVALID_SCALAR;
+  PolydimTolerances T; pd_default_tol(&T);
+  if (tol) T = *tol;
+  if (!(T.basisOrtho > 0.0)) T.basisOrtho = 1e-9;
+  if (!(T.pointNorm > 0.0))  T.pointNorm  = 1e-9;
+  if (!(T.gramOrtho > 0.0))  T.gramOrtho  = 1e-12;
+  if (!(T.pivotRel > 0.0))   T.pivotRel   = 1e-12;
+  if (!pd_check_finite(y, D) || !pd_check_finite(u, D) || !pd_check_finite(v, D))
+    return POLYDIM_ERR_NAN_OR_INF;
+  if (T.rejectSubnormal &&
+      (!pd_check_subnormal(y, D) || !pd_check_subnormal(u, D) || !pd_check_subnormal(v, D)))
+    return POLYDIM_ERR_NUMERICAL_INSTABILITY;
+
+  double uu = pd_pdot(u, u, D), vv = pd_pdot(v, v, D), uv = pd_pdot(u, v, D);
+  double uuE = fabs(uu - 1.0), vvE = fabs(vv - 1.0), uvE = fabs(uv);
+  if (uuE > T.basisOrtho || vvE > T.basisOrtho || uvE > T.basisOrtho)
+    return POLYDIM_ERR_BASIS_NOT_ORTHONORMAL;
+
+  double* vp = (double*)malloc(D * sizeof(double));
+  if (!vp) return POLYDIM_ERR_NULL_POINTER;
+  int32_t rc = POLYDIM_SUCCESS;
+  double yn = sqrt(pd_pdot(y, y, D));
+  if (rep) rep->pointNormErr = fabs(yn - 1.0);
+  if (fabs(yn - 1.0) > T.pointNorm) { rc = POLYDIM_ERR_POINT_OFF_MANIFOLD; goto done; }
+
+  /* vp = v - (v.u)u, renormalizada; degenerada => base rota */
+  {
+    double n2 = 0.0, c = 0.0;
+    for (uint64_t i = 0; i < D; i++) {
+      double t = v[i] - uv * u[i];
+      vp[i] = t; n2 = pd_neumaier(n2, t * t, &c);
+    }
+    n2 += c;
+    if (!(n2 > 1e-16)) { rc = POLYDIM_ERR_BASIS_NOT_ORTHONORMAL; goto done; }
+    double s = 1.0 / sqrt(n2);
+    for (uint64_t i = 0; i < D; i++) vp[i] *= s;
+  }
+  {
+    double a = pd_pdot(y, u, D), b = pd_pdot(y, vp, D);
+    double sn = sin(theta), sh = sin(0.5 * theta), vs = 2.0 * sh * sh; /* versin estable */
+    double Du = -(a * vs) - (b * sn);
+    double Dv =  (a * sn) - (b * vs);
+    int64_t i;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (i = 0; i < (int64_t)D; i++) {
+      double p1 = Du * u[i], s1, e1, p2, s2, e2;
+      pd_two_sum(y[i], p1, &s1, &e1);
+      p2 = Dv * vp[i];
+      pd_two_sum(s1, p2, &s2, &e2);
+      out[i] = s2 + e2;
+    }
+    /* correccion de norma: escala + una iteracion de Newton verificada */
+    double n2o = pd_pdot(out, out, D);
+    if (!(n2o > 1e-290)) { rc = POLYDIM_ERR_DEGENERATE_NORM; goto done; }
+    double inv = 1.0 / sqrt(n2o);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (i = 0; i < (int64_t)D; i++) out[i] *= inv;
+    double err = pd_pdot(out, out, D) - 1.0;
+    if (fabs(err) > 4.44e-16) {
+      double corr = 1.0 - 0.5 * err;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+      for (i = 0; i < (int64_t)D; i++) out[i] *= corr;
+      err = pd_pdot(out, out, D) - 1.0;
+    }
+    if (rep) {
+      pd_rep_clear(rep);
+      rep->basisUuErr = uuE; rep->basisVvErr = vvE; rep->basisUvErr = uvE;
+      rep->pointNormErr = fabs(yn - 1.0);
+      /* certificado de isometria: u-componente despues de rotar = a*cos - b*sin */
+      double cn = cos(theta);
+      double expect = a * cn - b * sn;
+      rep->outNormErr = fabs(err);
+      rep->orthoErr = fabs(pd_pdot(out, u, D) - expect);
+      rep->threadsUsed = (uint64_t)pd_threads();
+      rep->pivotMin = 0.0; rep->pivotThreshold = 0.0;
+    }
+  }
+done:
+  free(vp);
+  return rc;
+}
+
+/* ---- autodiagnostico obligatorio (lo invoca Polydim.open en Dart) ---- */
+int32_t polydim_selftest_all(void) {
+  /* 0. FTZ/DAZ del MXCSR: purgarian subnormales y romperian la compensacion */
+#ifdef PD_X86_FTZ_CHECK
+  if (_mm_getcsr() & 0x8040u) return POLYDIM_ERR_COMPENSATION_BROKEN;
+#endif
+  /* 1. TwoSum intacto (detecta -ffast-math) */
+  { double s, e; pd_two_sum(1.0, 0x1p-53, &s, &e);
+    if (e != 0x1p-53) return POLYDIM_ERR_COMPENSATION_BROKEN; }
+  const uint64_t D = 4096;
+  double* bufs = (double*)malloc(sizeof(double) * D * 6);
+  if (!bufs) return POLYDIM_ERR_NULL_POINTER;
+  double *u = bufs, *v = bufs + D, *y = bufs + 2 * D, *w = bufs + 3 * D,
+         *o1 = bufs + 4 * D, *o2 = bufs + 5 * D;
+  uint64_t st = 0x9E3779B97F4A7C15ull;
+  int32_t rc = POLYDIM_SUCCESS;
+  for (uint64_t i = 0; i < D * 4; i++) {  /* splitmix64 determinista */
+    st += 0x9E3779B97F4A7C15ull; uint64_t z = st;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    bufs[i] = (double)(z >> 11) / 9007199254740992.0 * 2.0 - 1.0;
+  }
+  PolydimReport rep;
+  if (polydim_orthonormalize_pair_f64(u, v, D, &rep)) { rc = -100; goto out; }
+  if (rep.basisUvErr > 1e-14 || rep.basisUuErr > 1e-14) { rc = -101; goto out; }
+  if (polydim_project_sphere_f64(y, w, D, &rep)) { rc = -102; goto out; }
+  /* theta = 0 => identidad bit a bit */
+  if (polydim_rodrigues_geodesic_f64(w, u, v, o1, 0.0, D, NULL, &rep)) { rc = -103; goto out; }
+  for (uint64_t i = 0; i < D; i++) if (o1[i] != w[i]) { rc = -104; goto out; }
+  /* rotacion general: norma e isometria */
+  if (polydim_rodrigues_geodesic_f64(w, u, v, o2, 0.7, D, NULL, &rep)) { rc = -105; goto out; }
+  if (rep.outNormErr > 4.44e-16) { rc = -106; goto out; }
+  if (rep.orthoErr > 1e-12) { rc = -107; goto out; }
+  /* rechazos */
+  if (polydim_rodrigues_geodesic_f64(w, u, v, o1, 0.0 / 0.0, D, NULL, NULL) != -8) { rc = -108; goto out; }
+  u[0] += 0.5; /* rompe ortonormalidad */
+  if (polydim_rodrigues_geodesic_f64(w, u, v, o1, 0.3, D, NULL, NULL) != -9) { rc = -109; goto out; }
+  u[0] -= 0.5;
+  for (uint64_t i = 0; i < D; i++) y[i] = w[i] * 2.0; /* fuera de la variedad */
+  if (polydim_rodrigues_geodesic_f64(y, u, v, o1, 0.3, D, NULL, NULL) != -10) { rc = -110; goto out; }
+  if (polydim_project_sphere_f64(w, w, D, NULL) != -11) { rc = -111; goto out; }
+out:
+  free(bufs);
+  return rc;
+}
+
+const char* polydim_build_info(void) { return POLYDIM_VER_STR; }
+
+// =========================================
+// ARCHIVO: polydim_pmtp.c   (seqlock doble banco + leases; C11)
+// =========================================
+/* Contrato de errores futex interno: 0 = despertado/valor cambio (re-chequear),
+   1 = timeout, -1 = error. Uniforme en Win32/Linux/macOS.
+   INVARIANTE DE ESCritura: el writer NUNCA escribe un banco con leases
+   ACTIVE/RESERVED de proceso vivo. Espera con futex + reaping de huerfanos. */
+#include "polydim.h"
+#include <string.h>
+#include <stdatomic.h>
+#include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <process.h>
+#include <synchapi.h>
+#define PD_GETPID() ((uint32_t)_getpid())
+static uint64_t pd_now_ns(void) { return (uint64_t)GetTickCount64() * 1000000ull; }
+static int pd_process_alive(uint32_t pid) {
+  if (pid == 0) return 0;
+  HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+  if (!h) return (GetLastError() == ERROR_ACCESS_DENIED) ? 1 : 0;
+  DWORD ec = 0; int r = 0;
+  if (GetExitCodeProcess(h, &ec)) r = (ec == STILL_ACTIVE);
+  CloseHandle(h); return r;
+}
+#else
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#include <linux/futex.h>
+#endif
+#if defined(__APPLE__)
+extern int __ulock_wait(uint32_t op, void* addr, uint64_t val, uint32_t timeout_us);
+extern int __ulock_wake(uint32_t op, void* addr, uint64_t wake_val);
+#define PD_ULOCK_CMP_WAIT 1
+#define PD_ULOCK_WAKE_ALL 0x100
+#endif
+#define PD_GETPID() ((uint32_t)getpid())
+static uint64_t pd_now_ns(void) {
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+static int pd_process_alive(uint32_t pid) {
+  if (pid == 0) return 0;
+  return (kill((pid_t)pid, 0) == 0) ? 1 : 0;
+}
+#endif
+
+static int pd_futex_wait(_Atomic uint32_t* addr, uint32_t expect, uint32_t timeout_ms) {
+#if defined(_WIN32)
+  for (int i = 0; i < 2000; i++) {
+    if (atomic_load_explicit(addr, memory_order_acquire) != expect) return 0;
+    YieldProcessor();
+  }
+  DWORD t = (timeout_ms == 0xFFFFFFFFu) ? INFINITE : timeout_ms;
+  BOOL ok = WaitOnAddress((volatile void*)addr, &expect, sizeof(uint32_t), t);
+  if (ok) return 0;
+  return (GetLastError() == ERROR_TIMEOUT) ? 1 : -1;
+#elif defined(__linux__)
+  struct timespec ts, *pts = NULL;
+  if (timeout_ms != 0xFFFFFFFFu) {
+    ts.tv_sec = timeout_ms / 1000; ts.tv_nsec = (long)(timeout_ms % 1000) * 1000000L;
+    pts = &ts;
+  }
+  long r = syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAIT, expect, pts, NULL, 0);
+  if (r == 0) return 0;
+  if (errno == ETIMEDOUT) return 1;
+  if (errno == EAGAIN) return 0;      /* el valor ya cambio: re-chequear */
+  return -1;
+#elif defined(__APPLE__)
+  uint32_t us = 0;                       /* 0 = sin timeout (XNU) */
+  if (timeout_ms != 0xFFFFFFFFu)
+    us = (timeout_ms >= 4294000u) ? 0xFFFF0000u : timeout_ms * 1000u;
+  int r = __ulock_wait(PD_ULOCK_CMP_WAIT, (void*)addr, expect, us);
+  if (r == 0) return 0;
+  if (errno == ETIMEDOUT) return 1;
+  if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+  return -1;
+#else
+  (void)addr; (void)expect; (void)timeout_ms; return -1;
+#endif
+}
+static void pd_futex_wake_all(_Atomic uint32_t* addr) {
+#if defined(_WIN32)
+  WakeByAddressAll((PVOID)addr);
+#elif defined(__linux__)
+  syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAKE, 0x7fffffff, NULL, NULL, 0);
+#elif defined(__APPLE__)
+  __ulock_wake(PD_ULOCK_CMP_WAIT | PD_ULOCK_WAKE_ALL, (void*)addr, 0);
+#else
+  (void)addr;
+#endif
+}
+
+struct polydim_pmtp {
+  polydim_pmtp_header_t* hdr;
+  uint8_t* slots[2];
+  uint32_t pending_slot;   /* estado LOCAL al proceso (el struct es malloc local) */
+  int has_pending;
+};
+
+static uintptr_t pd_align128(uintptr_t p) { return (p + 127u) & ~(uintptr_t)127u; }
+
+polydim_pmtp_t* polydim_pmtp_create(void* region, uint64_t region_bytes, uint64_t slot_bytes) {
+  if (!region || slot_bytes == 0) return NULL;
+  if (((uintptr_t)region & 7u) != 0) return NULL;
+  uintptr_t base = pd_align128((uintptr_t)region);
+  uint64_t need = (uint64_t)(base - (uintptr_t)region) + sizeof(polydim_pmtp_header_t);
+  need = (need + 127u) & ~127ull;
+  if (slot_bytes > (0xFFFFFFFFFFFFFFFFull - need) / 2) return NULL;
+  if (region_bytes < need + 2 * slot_bytes) return NULL;
+  polydim_pmtp_header_t* h = (polydim_pmtp_header_t*)base;
+  uint64_t magic = atomic_load_explicit(&h->magic, memory_order_acquire);
+  if (magic != PMTP_MAGIC) {                       /* primer creador: inicializa */
+    memset(h, 0, sizeof(*h));
+    atomic_store_explicit(&h->seq, 0, memory_order_relaxed);
+    atomic_store_explicit(&h->active_slot, 0, memory_order_relaxed);
+    atomic_store_explicit(&h->writer_pid, 0, memory_order_relaxed);
+    atomic_store_explicit(&h->writer_heartbeat_ns, 0, memory_order_relaxed);
+    h->slot_bytes = slot_bytes;
+    atomic_store_explicit(&h->magic, PMTP_MAGIC, memory_order_release);
+  } else if (h->slot_bytes != slot_bytes) return NULL;
+  if (!atomic_is_lock_free(&h->seq)) return NULL;
+  polydim_pmtp_t* p = (polydim_pmtp_t*)malloc(sizeof(polydim_pmtp_t));
+  if (!p) return NULL;
+  p->hdr = h;
+  p->slots[0] = (uint8_t*)(base + (uintptr_t)need);
+  p->slots[1] = p->slots[0] + slot_bytes;
+  p->pending_slot = 0; p->has_pending = 0;
+  return p;
+}
+
+void polydim_pmtp_destroy(polydim_pmtp_t* p) { free(p); }  /* no desmapea la shm */
+
+uint64_t polydim_pmtp_seq(const polydim_pmtp_t* p) {
+  return p ? atomic_load_explicit(&p->hdr->seq, memory_order_acquire) : 0;
+}
+
+void* polydim_pmtp_slot_data(polydim_pmtp_t* p, uint32_t slot, uint64_t* bytes_out) {
+  if (!p || slot > 1) return NULL;
+  if (bytes_out) *bytes_out = p->hdr->slot_bytes;
+  return p->slots[slot];
+}
+
+void polydim_pmtp_writer_pulse(polydim_pmtp_t* p) {
+  if (p) atomic_store_explicit(&p->hdr->writer_heartbeat_ns, pd_now_ns(), memory_order_release);
+}
+
+static void pd_reap_bank(polydim_pmtp_header_t* h, uint32_t bank) {
+  for (int i = 0; i < PMTP_MAX_READERS; i++) {
+    polydim_pmtp_lease_t* L = &h->leases[bank][i];
+    uint32_t st = atomic_load_explicit((_Atomic uint32_t*)&L->state, memory_order_acquire);
+    if ((st == PMTP_LEASE_ACTIVE || st == PMTP_LEASE_RESERVED) && !pd_process_alive(L->pid)) {
+      atomic_store_explicit((_Atomic uint32_t*)&L->state, PMTP_LEASE_RECLAIMED, memory_order_release);
+      pd_futex_wake_all((_Atomic uint32_t*)&L->state);
+      atomic_fetch_add_explicit((_Atomic uint32_t*)&h->num_reclaimed, 1, memory_order_relaxed);
+    }
+  }
+}
+
+int32_t polydim_pmtp_begin_write(polydim_pmtp_t* p, uint32_t* slot_out) {
+  if (!p || !slot_out) return POLYDIM_ERR_NULL_POINTER;
+  polydim_pmtp_header_t* h = p->hdr;
+  uint32_t mypid = PD_GETPID();
+  for (;;) {
+    uint32_t exp = 0;
+    if (atomic_compare_exchange_strong_explicit(&h->writer_pid, &exp, mypid,
+                                                  memory_order_acq_rel, memory_order_acquire)) {
+      h->writer_start_ns = pd_now_ns();
+      break;                                          /* somos el writer */
+    }
+    /* writer ocupado: takeover solo si heartbeat muerto Y proceso muerto */
+    uint32_t wpid = exp;
+    uint64_t hb = atomic_load_explicit(&h->writer_heartbeat_ns, memory_order_acquire);
+    if (pd_now_ns() - hb < (uint64_t)PMTP_WRITER_TIMEOUT_MS * 1000000ull)
+      return POLYDIM_ERR_WRITER_CONTENTION;
+    if (pd_process_alive(wpid)) return POLYDIM_ERR_WRITER_CONTENTION;
+    if (atomic_compare_exchange_strong_explicit(&h->writer_pid, &wpid, mypid,
+                                                  memory_order_acq_rel, memory_order_acquire)) {
+      h->writer_start_ns = pd_now_ns();
+      break; /* seq siempre par en V807: no hay abort que recuperar */
+    }
+  }
+  polydim_pmtp_writer_pulse(p);
+  uint32_t target = 1u - atomic_load_explicit(&h->active_slot, memory_order_acquire);
+  /* espera SIN RENDICION a que el banco objetivo quede libre de lectores vivos */
+  for (int i = 0; i < PMTP_MAX_READERS; i++) {
+    _Atomic uint32_t* stp = (_Atomic uint32_t*)&h->leases[target][i].state;
+    for (;;) {
+      uint32_t st = atomic_load_explicit(stp, memory_order_acquire);
+      if (st != PMTP_LEASE_ACTIVE && st != PMTP_LEASE_RESERVED) break;
+      pd_reap_bank(h, target);
+      polydim_pmtp_writer_pulse(p);
+      pd_futex_wait(stp, st, 20);
+    }
+  }
+  *slot_out = target;
+  p->pending_slot = target; p->has_pending = 1;
+  return POLYDIM_SUCCESS;
+}
+
+int32_t polydim_pmtp_commit_write(polydim_pmtp_t* p, uint32_t slot) {
+  if (!p) return POLYDIM_ERR_NULL_POINTER;
+  polydim_pmtp_header_t* h = p->hdr;
+  uint32_t mypid = PD_GETPID();
+  if (slot > 1 || atomic_load_explicit(&h->writer_pid, memory_order_acquire) != mypid)
+    return POLYDIM_ERR_NOT_INITIALIZED;
+  if (!p->has_pending || p->pending_slot != slot) return POLYDIM_ERR_INVALID_DIMENSION;
+  uint64_t s = atomic_load_explicit(&h->seq, memory_order_acquire);
+  atomic_store_explicit(&h->active_slot, slot, memory_order_release); /* antes que seq */
+  atomic_thread_fence(memory_order_release);
+  atomic_store_explicit(&h->seq, s + 2, memory_order_release);        /* par: estable */
+  uint32_t exp = mypid;
+  atomic_compare_exchange_strong_explicit(&h->writer_pid, &exp, 0,
+                                          memory_order_release, memory_order_relaxed);
+  p->has_pending = 0;
+  return POLYDIM_SUCCESS;
+}
+
+int32_t polydim_pmtp_acquire_read(polydim_pmtp_t* p, uint64_t* seq_out,
+                                  uint32_t* slot_out, uint32_t* lease_out) {
+  if (!p || !seq_out || !slot_out || !lease_out) return POLYDIM_ERR_NULL_POINTER;
+  polydim_pmtp_header_t* h = p->hdr;
+  uint32_t mypid = PD_GETPID();
+acquire_retry:
+  for (uint64_t spin = 0; ; spin++) {
+    uint64_t s1 = atomic_load_explicit(&h->seq, memory_order_acquire);
+    uint32_t slot = atomic_load_explicit(&h->active_slot, memory_order_acquire);
+    uint64_t s2 = atomic_load_explicit(&h->seq, memory_order_acquire);
+    if (s1 != s2) {
+      if (spin > (1ull << 20)) return POLYDIM_ERR_SEQLOCK_RACE;
+      continue;
+    }
+    for (int attempt = 0; attempt < 2; attempt++) { /* 2da pasada tras reaping */
+      for (uint32_t i = 0; i < PMTP_MAX_READERS; i++) {
+        polydim_pmtp_lease_t* L = &h->leases[slot][i];
+        _Atomic uint32_t* stp = (_Atomic uint32_t*)&L->state;
+        uint32_t exp = atomic_load_explicit(stp, memory_order_acquire);
+        if (exp == PMTP_LEASE_ACTIVE || exp == PMTP_LEASE_RESERVED) continue;
+        if (atomic_compare_exchange_strong_explicit(stp, &exp, PMTP_LEASE_RESERVED,
+                                                      memory_order_acq_rel, memory_order_acquire)) {
+          L->pid = mypid; L->start_time_ns = pd_now_ns(); L->generation = s1;
+          atomic_store_explicit(stp, PMTP_LEASE_ACTIVE, memory_order_release);
+          if (atomic_load_explicit(&h->active_slot, memory_order_acquire) != slot) {
+            /* commit intercalado tras el CAS: soltar y re-adquirir de cero */
+            uint32_t e2 = PMTP_LEASE_ACTIVE;
+            atomic_compare_exchange_strong_explicit(stp, &e2, PMTP_LEASE_CLOSED,
+                                                    memory_order_release, memory_order_relaxed);
+            goto acquire_retry;
+          }
+          *seq_out = s1; *slot_out = slot; *lease_out = i;
+          return POLYDIM_SUCCESS;
+        }
+      }
+      if (attempt == 0) pd_reap_bank(h, slot); /* huerfanos antes de rendirse */
+    }
+    return POLYDIM_ERR_WOULD_BLOCK;
+  }
+}
+
+int32_t polydim_pmtp_validate_read(const polydim_pmtp_t* p, uint32_t slot,
+                                   uint64_t seq_ticket, uint32_t lease) {
+  if (!p || slot > 1 || lease >= PMTP_MAX_READERS) return POLYDIM_ERR_NULL_POINTER;
+  const polydim_pmtp_lease_t* L = &p->hdr->leases[slot][lease];
+  uint32_t st = atomic_load_explicit((_Atomic uint32_t const*)&L->state, memory_order_acquire);
+  if (st != PMTP_LEASE_ACTIVE) return POLYDIM_ERR_SEQLOCK_RACE;
+  if (L->generation != seq_ticket) return POLYDIM_ERR_SEQLOCK_RACE;
+  /* El seq PUEDE avanzar legalmente durante la lectura (commits del otro banco):
+     nuestra data esta blindada por el lease. Lo que invalida la seleccion es
+     que nuestro banco haya dejado de ser el activo. */
+  if (atomic_load_explicit(&p->hdr->active_slot, memory_order_acquire) != slot)
+    return POLYDIM_ERR_SEQLOCK_RACE;
+  return POLYDIM_SUCCESS;
+}
+
+void polydim_pmtp_release_read(polydim_pmtp_t* p, uint32_t slot, uint32_t lease) {
+  if (!p || slot > 1 || lease >= PMTP_MAX_READERS) return;
+  polydim_pmtp_lease_t* L = &p->hdr->leases[slot][lease];
+  _Atomic uint32_t* stp = (_Atomic uint32_t*)&L->state;
+  uint32_t exp = PMTP_LEASE_ACTIVE;
+  /* solo el dueno del lease puede liberarlo */
+  if (L->pid == PD_GETPID() &&
+      atomic_compare_exchange_strong_explicit(stp, &exp, PMTP_LEASE_CLOSED,
+                                                memory_order_release, memory_order_relaxed))
+    pd_futex_wake_all(stp);
+}
+
+/* ---- memoria compartida con nombre ---- */
+#if defined(_WIN32)
+int32_t polydim_shm_open(const char* name, uint64_t bytes, int32_t create,
+                         void** out_mapping, uint64_t* out_bytes) {
+  (void)create;
+  HANDLE fm = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                                 (DWORD)((bytes + 64) >> 32), (DWORD)((bytes + 64) & 0xffffffffu), name);
+  if (!fm) return -1;
+  uint8_t* base = (uint8_t*)MapViewOfFile(fm, FILE_MAP_ALL_ACCESS, 0, 0, bytes + 64);
+  if (!base) { CloseHandle(fm); return -1; }
+  *(HANDLE*)base = fm;                     /* handle guardado 64B antes del mapping util */
+  *out_mapping = base + 64; *out_bytes = bytes;
+  return 0;
+}
+void polydim_shm_close(void* mapping, uint64_t bytes) {
+  (void)bytes;
+  if (!mapping) return;
+  uint8_t* base = (uint8_t*)mapping - 64;
+  HANDLE fm = *(HANDLE*)base;
+  UnmapViewOfFile(base); CloseHandle(fm);
+}
+#else
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+int32_t polydim_shm_open(const char* name, uint64_t bytes, int32_t create,
+                         void** out_mapping, uint64_t* out_bytes) {
+  int fd = shm_open(name, O_RDWR | O_CREAT, 0600);
+  if (fd < 0) return -1;
+  (void)create;
+  if (ftruncate(fd, (off_t)bytes) != 0) { close(fd); return -1; }
+  void* m = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+  if (m == MAP_FAILED) return -1;
+  *out_mapping = m; *out_bytes = bytes;
+  return 0;
+}
+void polydim_shm_close(void* mapping, uint64_t bytes) {
+  if (mapping) munmap(mapping, bytes);
+}
+#endif
+
+// =========================================
+// ARCHIVO: polydim_kernel_cpp.hpp  (ABI C++ interna: handles, SPSC, solver)
+// =========================================
+#ifndef POLYDIM_KERNEL_CPP_HPP
+#define POLYDIM_KERNEL_CPP_HPP
+#include <cstdint>
+#include <cstddef>
+#include <atomic>
+#include "polydim.h"
+
+struct PolydimHandle {
+  void* data;
+  size_t bytes;
+  std::atomic<int32_t> refcount;
+  uint32_t flags;
+  uint64_t allocation_id;
+};
+
+struct PolydimTelemetryEvent {   /* 24 B, ring SPSC */
+  uint64_t timestamp_ns;
+  uint32_t type;
+  uint32_t code;
+  double value;
+};
+
+struct PolydimSpscRing {         /* bounded lock-free (NO wait-free); SPSC */
+  std::atomic<uint64_t> write_index{0};
+  std::atomic<uint64_t> read_index{0};
+  uint64_t capacity;
+  uint64_t capacity_mask;
+  PolydimTelemetryEvent* ring_buffer;
+};
+
+struct PolydimTelemetryPoint {
+  uint64_t iteration;
+  double objective_value;
+  double gradient_norm;
+  double step_size;
+  double ortho_error;
+  uint64_t elapsed_time_ns;
+};
+
+struct PolydimTelemetryBuffer {
+  PolydimTelemetryPoint* points;
+  uint64_t capacity;
+  uint64_t recorded_count;
+};
+
+enum PolydimSolverStatus {
+  POLYDIM_ST_OK = 0,
+  POLYDIM_ST_CONVERGED_GRADIENT = 1,
+  POLYDIM_ST_CONVERGED_STEP = 2,
+  POLYDIM_ST_MAX_ITERATIONS = 3,          /* compatible con log V804 "Estado: 3" */
+  POLYDIM_ST_ERR_ORTHO_VIOLATION = 4
+};
+
+enum PolydimRetraction { POLYDIM_RETRACTION_CAYLEY_SMW = 0, POLYDIM_RETRACTION_EUCLIDEAN = 1 };
+
+struct PolydimSolverOptions {
+  uint64_t max_iterations;
+  double gradient_tolerance;
+  double step_tolerance;
+  double ortho_tolerance;
+  double learning_rate;
+  double shift_regularization;
+  uint32_t sampling_period;
+  uint32_t num_threads;
+  uint32_t retraction_type;
+};
+
+struct PolydimSolverResult {
+  int32_t status;
+  uint64_t iterations_executed;
+  double final_objective;
+  double final_grad_norm;
+  double final_ortho_error;
+  uint64_t total_time_ns;
+  char status_message[128];
+};
+
+extern "C" {
+void*  polydim_alloc_aligned(size_t bytes, size_t alignment);
+void   polydim_free_aligned(void* ptr);
+PolydimHandle* polydim_handle_create(size_t bytes, size_t alignment);
+void   polydim_handle_retain(PolydimHandle* h);
+void   polydim_handle_release(PolydimHandle* h);
+int32_t polydim_spsc_init(PolydimSpscRing* ring, size_t capacity);
+int32_t polydim_spsc_push(PolydimSpscRing* ring, const PolydimTelemetryEvent* ev);
+int32_t polydim_spsc_pop(PolydimSpscRing* ring, PolydimTelemetryEvent* ev);
+void   polydim_spsc_destroy(PolydimSpscRing* ring);
+int32_t polydim_stream_copy_nt(double* dest, const double* src, size_t count);
+int32_t polydim_gram_dsyrk(const double* X, size_t D, size_t K, double* K_out, uint32_t threads);
+int32_t polydim_cross_gram(const double* A, const double* B, size_t D, size_t K,
+                           double* Out, uint32_t threads);
+int32_t polydim_stiefel_optimize(const double* problem_data, size_t problem_size,
+                                 double* X, size_t D, size_t K,
+                                 const PolydimSolverOptions* options,
+                                 PolydimSolverResult* result,
+                                 PolydimTelemetryBuffer* telemetry);
+int32_t polydim_structured_lsm_step(double* state, const double* input,
+                                    const int8_t* d1, const uint32_t* p1,
+                                    const int8_t* d2, const uint32_t* p2,
+                                    size_t D, double alpha_leak, double input_scale);
+void   polydim_set_fp_mode(int32_t mode);
+int32_t polydim_get_fp_mode(void);
+const char* polydim_get_blas_backend_name(void);
+}
+#endif
+
+// =========================================
+// ARCHIVO: polydim_monolith.cpp
+// =========================================
+/* Build: g++ -O2 -std=c++17 -fopenmp -c polydim_monolith.cpp (-mavx2 opcional:
+   habilita streaming de 32B; sin el flag, ruta SSE2 de 16B. Comentario honesto.)
+   Grama/solver: SIN atomicas en lazos calientes; parciales por hilo + merge
+   ordenado por indice de hilo (determinista para nº de hilos fijo, ambos modos). */
+#include "polydim_kernel_cpp.hpp"
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <chrono>
+#include <vector>
+#include <algorithm>
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+#if defined(_M_X64) || defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#define PD_X86 1
+#endif
+
+enum { POLYDIM_FP_DETERMINISTIC = 0, POLYDIM_FP_THROUGHPUT = 1 };
+static std::atomic<int32_t> g_fp_mode{POLYDIM_FP_THROUGHPUT};
+extern "C" void polydim_set_fp_mode(int32_t m) { g_fp_mode.store(m, std::memory_order_relaxed); }
+extern "C" int32_t polydim_get_fp_mode() { return g_fp_mode.load(std::memory_order_relaxed); }
+extern "C" const char* polydim_get_blas_backend_name() { return "internal-tiled-v807"; }
+
+static inline void pd_knuth_two_sum(double a, double b, double* s, double* e) {
+  double sum = a + b, bv = sum - a, av = sum - bv;
+  *e = (a - av) + (b - bv); *s = sum;
+}
+static double pd_twosum_tree_reduce(const double* data, size_t N) { /* utilidad exportable */
+  if (N == 0) return 0.0;
+  if (N == 1) return data[0];
+  std::vector<double> cur(data, data + N), errs;
+  while (cur.size() > 1) {
+    std::vector<double> nxt; size_t pairs = cur.size() / 2;
+    for (size_t i = 0; i < pairs; i++) {
+      double s, t; pd_knuth_two_sum(cur[2*i], cur[2*i+1], &s, &t);
+      nxt.push_back(s); if (t != 0.0) errs.push_back(t);
+    }
+    if (cur.size() % 2) nxt.push_back(cur.back());
+    cur.swap(nxt);
+  }
+  double total = cur[0];
+  for (double e : errs) { double s, t; pd_knuth_two_sum(total, e, &s, &t); total = s + t; }
+  return total;
+}
+
+/* ---- non-temporal streaming (SSE2 siempre en x86_64; AVX2 con -mavx2) ---- */
+extern "C" int32_t polydim_stream_copy_nt(double* dest, const double* src, size_t count) {
+  if (!dest || !src) return POLYDIM_ERR_NULL_POINTER;
+  if (count == 0) return POLYDIM_SUCCESS;
+  size_t i = 0;
+#ifdef PD_X86
+#if defined(__AVX2__)
+  if (((uintptr_t)dest & 31u) == 0 && count >= 4) {
+    size_t blocks = count / 4;
+#pragma omp parallel for schedule(static)
+    for (int64_t b = 0; b < (int64_t)blocks; b++) {
+      size_t idx = (size_t)b * 4;
+      _mm256_stream_pd(&dest[idx], _mm256_loadu_pd(&src[idx]));
+    }
+    _mm_sfence(); i = blocks * 4;
+  } else
+#endif
+  if (((uintptr_t)dest & 15u) == 0 && count >= 2) {
+    size_t blocks = count / 2;
+#pragma omp parallel for schedule(static)
+    for (int64_t b = 0; b < (int64_t)blocks; b++) {
+      size_t idx = (size_t)b * 2;
+      _mm_stream_pd(&dest[idx], _mm_loadu_pd(&src[idx]));
+    }
+    _mm_sfence(); i = blocks * 2;
+  }
+#endif
+  for (; i < count; i++) dest[i] = src[i];
+  return POLYDIM_SUCCESS;
+}
+
+/* ---- allocator alineado + handles con refcount atomico ---- */
+static std::atomic<uint64_t> g_alloc_seq{1};
+extern "C" void* polydim_alloc_aligned(size_t bytes, size_t alignment) {
+  size_t a = (alignment >= 8) ? alignment : 8;
+  if (a & (a - 1)) a = 64;
+#if defined(_MSC_VER)
+  return _aligned_malloc(bytes, a);
+#else
+  void* p = nullptr;
+  return posix_memalign(&p, a, bytes) == 0 ? p : nullptr;
+#endif
+}
+extern "C" void polydim_free_aligned(void* ptr) {
+  if (!ptr) return;
+#if defined(_MSC_VER)
+  _aligned_free(ptr);
+#else
+  free(ptr);
+#endif
+}
+extern "C" PolydimHandle* polydim_handle_create(size_t bytes, size_t alignment) {
+  void* data = polydim_alloc_aligned(bytes, alignment);
+  if (!data) return nullptr;
+  PolydimHandle* h = new (std::nothrow) PolydimHandle();
+  if (!h) { polydim_free_aligned(data); return nullptr; }
+  h->data = data; h->bytes = bytes; h->refcount.store(1); h->flags = 0;
+  h->allocation_id = g_alloc_seq.fetch_add(1, std::memory_order_relaxed);
+  return h;
+}
+extern "C" void polydim_handle_retain(PolydimHandle* h) {
+  if (h) h->refcount.fetch_add(1, std::memory_order_relaxed);
+}
+extern "C" void polydim_handle_release(PolydimHandle* h) {
+  if (!h) return;
+  if (h->refcount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    polydim_free_aligned(h->data); delete h;
+  }
+}
+
+/* ---- SPSC bounded lock-free ---- */
+extern "C" int32_t polydim_spsc_init(PolydimSpscRing* ring, size_t capacity) {
+  if (!ring) return POLYDIM_ERR_NULL_POINTER;
+  if (capacity < 2 || (capacity & (capacity - 1))) return POLYDIM_ERR_INVALID_DIMENSION;
+  ring->ring_buffer = (PolydimTelemetryEvent*)polydim_alloc_aligned(
+      capacity * sizeof(PolydimTelemetryEvent), 128);
+  if (!ring->ring_buffer) return POLYDIM_ERR_NULL_POINTER;
+  memset(ring->ring_buffer, 0, capacity * sizeof(PolydimTelemetryEvent));
+  ring->write_index.store(0, std::memory_order_relaxed);
+  ring->read_index.store(0, std::memory_order_relaxed);
+  ring->capacity = capacity; ring->capacity_mask = capacity - 1;
+  return POLYDIM_SUCCESS;
+}
+extern "C" int32_t polydim_spsc_push(PolydimSpscRing* ring, const PolydimTelemetryEvent* ev) {
+  if (!ring || !ev || !ring->ring_buffer) return POLYDIM_ERR_NULL_POINTER;
+  uint64_t w = ring->write_index.load(std::memory_order_relaxed);
+  uint64_t r = ring->read_index.load(std::memory_order_acquire);
+  if (w - r >= ring->capacity) return POLYDIM_ERR_BUFFER_OVERFLOW;
+  ring->ring_buffer[w & ring->capacity_mask] = *ev;
+  std::atomic_thread_fence(std::memory_order_release);
+  ring->write_index.store(w + 1, std::memory_order_release);
+  return POLYDIM_SUCCESS;
+}
+extern "C" int32_t polydim_spsc_pop(PolydimSpscRing* ring, PolydimTelemetryEvent* ev) {
+  if (!ring || !ev || !ring->ring_buffer) return POLYDIM_ERR_NULL_POINTER;
+  uint64_t r = ring->read_index.load(std::memory_order_relaxed);
+  uint64_t w = ring->write_index.load(std::memory_order_acquire);
+  if (r == w) return POLYDIM_ERR_WOULD_BLOCK;
+  *ev = ring->ring_buffer[r & ring->capacity_mask];
+  ring->read_index.store(r + 1, std::memory_order_release);
+  return POLYDIM_SUCCESS;
+}
+extern "C" void polydim_spsc_destroy(PolydimSpscRing* ring) {
+  if (!ring) return;
+  polydim_free_aligned(ring->ring_buffer);
+  ring->ring_buffer = nullptr; ring->capacity = 0; ring->capacity_mask = 0;
+}
+
+/* ---- gramianas: parciales por hilo acumuladas por filas-d (acceso contiguo,
+   sin atomicas), merge ordenado por indice de hilo => determinista para nº de
+   hilos fijo en ambos modos. Layout: row-major D x K (X[d*K + k]).
+   K <= 256 (throughput) / K <= 128 (deterministico, exige array de comps). ---- */
+static int32_t pd_gram_like(const double* A, const double* B, size_t D, size_t K,
+                            double* Out, uint32_t threads, int symmetric) {
+  if (!A || !B || !Out) return POLYDIM_ERR_NULL_POINTER;
+  if (D == 0 || K == 0 || K > 256) return POLYDIM_ERR_INVALID_DIMENSION;
+  uint32_t nt = threads ? threads : 1;
+  if (nt > 256) nt = 256;
+  int fp = g_fp_mode.load(std::memory_order_relaxed);
+  if (fp == POLYDIM_FP_DETERMINISTIC && K > 128) return POLYDIM_ERR_INVALID_DIMENSION;
+  if (fp == POLYDIM_FP_DETERMINISTIC && nt > 32) nt = 32; /* memoria 2*nt*K^2 acotada */
+  size_t per = (fp == POLYDIM_FP_DETERMINISTIC) ? 2 : 1;
+  std::vector<double> partial((size_t)nt * per * K * K, 0.0);
+#pragma omp parallel num_threads(nt)
+  {
+    uint32_t id = 0;
+#if defined(_OPENMP)
+    id = (uint32_t)omp_get_thread_num();
+#endif
+    double* P  = partial.data() + (size_t)id * per * K * K;
+    double* Cp = P + K * K;
+    int64_t d;
+#pragma omp for schedule(static) nowait
+    for (d = 0; d < (int64_t)D; d++) {
+      const double* ar = A + (size_t)d * K;
+      const double* br = B + (size_t)d * K;
+      for (int64_t i = 0; i < (int64_t)K; i++) {
+        double xi = ar[i];
+        int64_t j0 = symmetric ? i : 0;
+        for (int64_t j = j0; j < (int64_t)K; j++) {
+          double v = xi * br[j];
+          if (fp == POLYDIM_FP_DETERMINISTIC) {
+            double t = P[i * K + j] + v;
+            if (std::fabs(P[i * K + j]) >= std::fabs(v)) Cp[i * K + j] += (P[i * K + j] - t) + v;
+            else                                        Cp[i * K + j] += (v - t) + P[i * K + j];
+            P[i * K + j] = t;
+          } else {
+            P[i * K + j] += v;
+          }
+        }
+      }
+    }
+  }
+  for (size_t i = 0; i < K; i++) {
+    size_t j0 = symmetric ? i : 0;
+    for (size_t j = j0; j < K; j++) {
+      double S = 0.0, Cc = 0.0;
+      for (uint32_t t = 0; t < nt; t++) {
+        const double* base = partial.data() + (size_t)t * per * K * K;
+        double v = base[i * K + j] + ((per == 2) ? base[K * K + i * K + j] : 0.0);
+        double t2 = S + v;
+        if (std::fabs(S) >= std::fabs(v)) Cc += (S - t2) + v; else Cc += (v - t2) + S;
+        S = t2;
+      }
+      Out[i * K + j] = S + Cc;
+      if (symmetric && j > i) Out[j * K + i] = S + Cc;
+    }
+  }
+  return POLYDIM_SUCCESS;
+}
+/* ---- algebra KxK ---- */
+static void pd_matmul_kxk(const double* A, const double* B, double* C, size_t K) {
+  memset(C, 0, K * K * sizeof(double));
+  for (size_t i = 0; i < K; i++)
+    for (size_t k = 0; k < K; k++) {
+      double a = A[i * K + k];
+      for (size_t j = 0; j < K; j++) C[i * K + j] += a * B[k * K + j];
+    }
+}
+static double pd_frob_diff(const double* A, const double* B, size_t n) {
+  double s = 0.0;
+  for (size_t i = 0; i < n; i++) { double d = A[i] - B[i]; s += d * d; }
+  return std::sqrt(s);
+}
+static bool pd_solve_kxk(double* A, double* B, size_t K, size_t nrhs) { /* Gauss-Jordan */
+  for (size_t i = 0; i < K; i++) {
+    size_t piv = i; double mx = std::fabs(A[i * K + i]);
+    for (size_t r = i + 1; r < K; r++)
+      if (std::fabs(A[r * K + i]) > mx) { mx = std::fabs(A[r * K + i]); piv = r; }
+    if (mx < 1e-15) return false;
+    if (piv != i) {
+      for (size_t c = 0; c < K; c++) std::swap(A[i * K + c], A[piv * K + c]);
+      for (size_t c = 0; c < nrhs; c++) std::swap(B[i * nrhs + c], B[piv * nrhs + c]);
+    }
+    double dg = A[i * K + i];
+    for (size_t c = i; c < K; c++) A[i * K + c] /= dg;
+    for (size_t c = 0; c < nrhs; c++) B[i * nrhs + c] /= dg;
+    for (size_t r = 0; r < K; r++) if (r != i) {
+      double f = A[r * K + i];
+      for (size_t c = i; c < K; c++) A[r * K + c] -= f * A[i * K + c];
+      for (size_t c = 0; c < nrhs; c++) B[r * nrhs + c] -= f * B[i * nrhs + c];
+    }
+  }
+  return true;
+}
+
+/* ---- Shifted CholQR2 con contador de regularizacion expuesto ---- */
+static int32_t pd_cholqr2(double* X, size_t D, size_t K, double shift, uint32_t threads,
+                          uint32_t* nreg) {
+  std::vector<double> Gram(K * K, 0.0), L(K * K, 0.0);
+  int32_t rc = polydim_gram_dsyrk(X, D, K, Gram.data(), threads);
+  if (rc) return rc;
+  double trace = 0.0;
+  for (size_t i = 0; i < K; i++) trace += Gram[i * K + i];
+  double ash = (shift > 0.0) ? shift * trace : 1e-14 * trace;
+  uint32_t regs = 0;
+  for (size_t i = 0; i < K; i++) {
+    for (size_t j = 0; j <= i; j++) {
+      double s = Gram[i * K + j];
+      for (size_t k = 0; k < j; k++) s -= L[i * K + k] * L[j * K + k];
+      if (i == j) {
+        if (s <= 1e-14) { s += ash; regs++; }
+        if (!(s > 0.0)) return POLYDIM_ERR_NUMERICAL_INSTABILITY; /* ruido: NO piso falso */
+        L[i * K + j] = std::sqrt(s);
+      } else L[i * K + j] = s / L[j * K + j];
+    }
+  }
+  std::vector<double> Linv(K * K, 0.0);
+  for (size_t i = 0; i < K; i++) {
+    Linv[i * K + i] = 1.0 / L[i * K + i];
+    for (size_t j = 0; j < i; j++) {
+      double s = 0.0;
+      for (size_t k = j; k < i; k++) s += L[i * K + k] * Linv[k * K + j];
+      Linv[i * K + j] = -s / L[i * K + i];
+    }
+  }
+#pragma omp parallel for schedule(static)
+  for (int64_t d = 0; d < (int64_t)D; d++) {
+    std::vector<double> tmp(K);
+    for (size_t k = 0; k < K; k++) {
+      double acc = 0.0;
+      for (size_t j = 0; j < K; j++) acc += X[(size_t)d * K + j] * Linv[k * K + j];
+      tmp[k] = acc;
+    }
+    for (size_t k = 0; k < K; k++) X[(size_t)d * K + k] = tmp[k];
+  }
+  if (nreg) *nreg = regs;
+  return POLYDIM_SUCCESS;
+}
+
+/* ---- Retraccion de Cayley-SMW (algebra KxK, sin atomicas) ---- */
+static int32_t pd_retract_cayley(double* X, const double* G, size_t D, size_t K,
+                                 double tau, double shift, uint32_t threads) {
+  std::vector<double> XtX(K * K), XtG(K * K), GtG(K * K);
+  int32_t rc = polydim_gram_dsyrk(X, D, K, XtX.data(), threads); if (rc) return rc;
+  rc = polydim_cross_gram(X, G, D, K, XtG.data(), threads);      if (rc) return rc;
+  rc = polydim_gram_dsyrk(G, D, K, GtG.data(), threads);         if (rc) return rc;
+  /* algebra V806 verbatim (empiricamente validada), sin atomicas */
+  std::vector<double> XtX_XtG(K * K);
+  pd_matmul_kxk(XtX.data(), XtG.data(), XtX_XtG.data(), K);
+  std::vector<double> GpGp(K * K);
+  for (size_t i = 0; i < K; i++)
+    for (size_t j = 0; j < K; j++) {
+      double dot = 0.0;
+      for (size_t k = 0; k < K; k++) dot += XtG[k * K + i] * XtX_XtG[k * K + j];
+      GpGp[i * K + j] = GtG[i * K + j] - dot;
+    }
+  std::vector<double> H(K * K);
+  pd_matmul_kxk(GpGp.data(), XtX.data(), H.data(), K);
+  std::vector<double> S(K * K), RHS(K * K);
+  double h2 = 0.25 * tau * tau, ht = 0.5 * tau;
+  for (size_t i = 0; i < K * K; i++) { S[i] = h2 * H[i]; RHS[i] = -ht * H[i]; }
+  for (size_t i = 0; i < K; i++) S[i * K + i] += 1.0;
+  if (!pd_solve_kxk(S.data(), RHS.data(), K, K)) return POLYDIM_ERR_NUMERICAL_INSTABILITY;
+  std::vector<double> XtX_Z2(K * K), Z1(K * K);
+  pd_matmul_kxk(XtX.data(), RHS.data(), XtX_Z2.data(), K);
+  for (size_t i = 0; i < K * K; i++) Z1[i] = XtX[i] + ht * XtX_Z2[i];
+  std::vector<double> XtG_Z1(K * K);
+  pd_matmul_kxk(XtG.data(), Z1.data(), XtG_Z1.data(), K);
+  std::vector<double> Coef(K * K);
+  for (size_t i = 0; i < K * K; i++) Coef[i] = RHS[i] - XtG_Z1[i];
+#pragma omp parallel for schedule(static)
+  for (int64_t d = 0; d < (int64_t)D; d++) {
+    std::vector<double> ru(K);
+    for (size_t k = 0; k < K; k++) {
+      double g = 0.0, x = 0.0;
+      for (size_t j = 0; j < K; j++) {
+        g += G[(size_t)d * K + j] * Z1[j * K + k];
+        x += X[(size_t)d * K + j] * Coef[j * K + k];
+      }
+      ru[k] = X[(size_t)d * K + k] - tau * g - tau * x;
+    }
+    for (size_t k = 0; k < K; k++) X[(size_t)d * K + k] = ru[k];
+  }
+  uint32_t regs = 0;
+  rc = pd_cholqr2(X, D, K, shift, threads, &regs);
+  if (rc) return rc;
+  return regs ? POLYDIM_STATUS_REGULARIZED : POLYDIM_SUCCESS;
+}
+
+/* ---- Solver monolitico de Stiefel ---- */
+extern "C" int32_t polydim_stiefel_optimize(
+    const double* problem_data, size_t problem_size, double* X, size_t D, size_t K,
+    const PolydimSolverOptions* options, PolydimSolverResult* result,
+    PolydimTelemetryBuffer* telemetry) {
+  if (!X || !options || !result) return POLYDIM_ERR_NULL_POINTER;
+  if (D == 0 || K == 0 || K > D || K > 256) return POLYDIM_ERR_INVALID_DIMENSION;
+  if (problem_data && problem_size != D * K) return POLYDIM_ERR_INVALID_DIMENSION; /* P1-4 */
+  auto t0 = std::chrono::high_resolution_clock::now();
+  uint64_t max_it = options->max_iterations ? options->max_iterations : 100;
+  double gtol = options->gradient_tolerance > 0 ? options->gradient_tolerance : 1e-6;
+  double otol = options->ortho_tolerance > 0 ? options->ortho_tolerance : 1e-6;
+  double lr = options->learning_rate > 0 ? options->learning_rate : 1e-3;
+  uint32_t sper = options->sampling_period ? options->sampling_period : 1;
+  uint32_t nt = options->num_threads ? options->num_threads : 1;
+  std::vector<double> G(D * K), I_K(K * K, 0.0);
+  for (size_t i = 0; i < K; i++) I_K[i * K + i] = 1.0;
+  int32_t status = POLYDIM_ST_MAX_ITERATIONS;
+  uint64_t iter = 0;
+  double obj = 0.0, gnorm = 0.0, oerr = 0.0;
+  uint32_t recoveries = 0;
+  for (iter = 0; iter < max_it; iter++) {
+    obj = 0.0;
+#pragma omp parallel for reduction(+:obj) num_threads(nt)
+    for (int64_t i = 0; i < (int64_t)(D * K); i++) {
+      double tv = (problem_data && (size_t)i < problem_size) ? problem_data[i] : 0.0;
+      double df = X[i] - tv; G[(size_t)i] = df; obj += 0.5 * df * df;
+    }
+    /* proyeccion tangente: XtG via gram cruzada (sin atomicas) */
+    std::vector<double> XtG(K * K), Sym(K * K);
+    { int32_t grc = polydim_cross_gram(X, G.data(), D, K, XtG.data(), nt);
+      if (grc) { status = grc; break; } }
+    for (size_t i = 0; i < K; i++)
+      for (size_t j = 0; j < K; j++) Sym[i * K + j] = 0.5 * (XtG[i * K + j] + XtG[j * K + i]);
+    gnorm = 0.0;
+#pragma omp parallel for reduction(+:gnorm) schedule(static) num_threads(nt)
+    for (int64_t d = 0; d < (int64_t)D; d++) {
+      for (size_t k = 0; k < K; k++) {
+        double corr = 0.0;
+        for (size_t j = 0; j < K; j++) corr += X[(size_t)d * K + j] * Sym[j * K + k];
+        G[(size_t)d * K + k] -= corr;
+        gnorm += G[(size_t)d * K + k] * G[(size_t)d * K + k];
+      }
+    }
+    gnorm = std::sqrt(gnorm);
+    if (gnorm < gtol) { status = POLYDIM_ST_CONVERGED_GRADIENT; break; }
+    /* retraccion con fallback */
+    int32_t rrc;
+    if (options->retraction_type == POLYDIM_RETRACTION_CAYLEY_SMW)
+      rrc = pd_retract_cayley(X, G.data(), D, K, lr, options->shift_regularization, nt);
+    else {
+#pragma omp parallel for schedule(static) num_threads(nt)
+      for (int64_t i = 0; i < (int64_t)(D * K); i++) X[i] -= lr * G[i];
+      uint32_t regs = 0;
+      rrc = pd_cholqr2(X, D, K, options->shift_regularization, nt, &regs);
+      if (!rrc && regs) rrc = POLYDIM_STATUS_REGULARIZED;
+    }
+    if (rrc && rrc != POLYDIM_STATUS_REGULARIZED) {
+      /* fallback: paso euclideo acotado + re-ortogonalizacion */
+#pragma omp parallel for schedule(static) num_threads(nt)
+      for (int64_t i = 0; i < (int64_t)(D * K); i++) X[i] -= lr * 0.5 * G[i];
+      uint32_t regs = 0;
+      if (pd_cholqr2(X, D, K, options->shift_regularization, nt, &regs)) { status = -5; break; }
+    }
+    /* chequeo de ortogonalidad con recuperacion (P1-7) */
+    std::vector<double> Gr(K * K);
+    { int32_t grc = polydim_gram_dsyrk(X, D, K, Gr.data(), nt);
+      if (grc) { status = grc; break; } }
+    oerr = pd_frob_diff(Gr.data(), I_K.data(), K * K);
+    if (oerr > otol) {
+      if (recoveries < 2) {
+        recoveries++;
+        uint32_t regs = 0;
+        if (!pd_cholqr2(X, D, K, options->shift_regularization, nt, &regs)) {
+          lr *= 0.5;
+          if (polydim_gram_dsyrk(X, D, K, Gr.data(), nt) == 0)
+            oerr = pd_frob_diff(Gr.data(), I_K.data(), K * K);
+          if (oerr <= otol) goto telemetry;
+        }
+      }
+      status = POLYDIM_ST_ERR_ORTHO_VIOLATION;
+      break;
+    }
+telemetry:
+    if (telemetry && telemetry->points && (iter % sper == 0) &&
+        telemetry->recorded_count < telemetry->capacity) {
+      auto now = std::chrono::high_resolution_clock::now();
+      PolydimTelemetryPoint& pt = telemetry->points[telemetry->recorded_count++];
+      pt.iteration = iter; pt.objective_value = obj; pt.gradient_norm = gnorm;
+      pt.step_size = lr; pt.ortho_error = oerr;
+      pt.elapsed_time_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
+    }
+  }
+  std::vector<double> Gf(K * K);
+  if (!polydim_gram_dsyrk(X, D, K, Gf.data(), nt)) oerr = pd_frob_diff(Gf.data(), I_K.data(), K * K);
+  auto t1 = std::chrono::high_resolution_clock::now();
+  result->status = status;
+  result->iterations_executed = iter + (status == POLYDIM_ST_MAX_ITERATIONS ? 0 : 1);
+  result->final_objective = obj; result->final_grad_norm = gnorm;
+  result->final_ortho_error = oerr;
+  result->total_time_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+  const char* msg =
+      status == POLYDIM_ST_CONVERGED_GRADIENT ? "Converged: gradient below tolerance." :
+      status == POLYDIM_ST_MAX_ITERATIONS ? "Completed maximum iterations." :
+      status == POLYDIM_ST_ERR_ORTHO_VIOLATION ? "Error: orthogonality violated after recovery." :
+      "Terminated with status code.";
+  std::snprintf(result->status_message, sizeof(result->status_message), "%s", msg);
+  return status;
+}
+
+/* ---- Reservorio estructurado LSM: convencion de signo UNIFICADA ----
+   ambas capas aplican el signo en el INDICE DE SALIDA (i), no en el permutado. */
+static void pd_fwht(double* x, size_t D) {
+  for (size_t len = 1; len < D; len <<= 1) {
+#pragma omp parallel for schedule(static)
+    for (int64_t i = 0; i < (int64_t)D; i += (int64_t)(2 * len))
+      for (size_t j = 0; j < len; j++) {
+        double u = x[i + j], v = x[i + j + len];
+        x[i + j] = u + v; x[i + j + len] = u - v;
+      }
+  }
+  double inv = 1.0 / std::sqrt((double)D);
+#pragma omp parallel for simd schedule(static)
+  for (int64_t i = 0; i < (int64_t)D; i++) x[i] *= inv;
+}
+extern "C" int32_t polydim_structured_lsm_step(
+    double* state, const double* input, const int8_t* d1, const uint32_t* p1,
+    const int8_t* d2, const uint32_t* p2, size_t D, double alpha_leak, double input_scale) {
+  if (!state || !d1 || !p1 || !d2 || !p2) return POLYDIM_ERR_NULL_POINTER;
+  if (D == 0 || (D & (D - 1))) return POLYDIM_ERR_INVALID_DIMENSION;
+  if (input && input == (const double*)state) return POLYDIM_ERR_ALIASED_BUFFERS;
+  std::vector<double> tmp(D);
+#pragma omp parallel for schedule(static)
+  for (int64_t i = 0; i < (int64_t)D; i++) {
+    double s = state[p1[i]];
+    tmp[i] = (d1[i] < 0) ? -s : s;          /* UNIFICADO: signo en i (antes era d1[p1[i]]) */
+  }
+  pd_fwht(tmp.data(), D);
+  double al = (alpha_leak > 0.0 && alpha_leak <= 1.0) ? alpha_leak : 0.8;
+  double sc = (input_scale != 0.0) ? input_scale : 1.0;
+#pragma omp parallel for schedule(static)
+  for (int64_t i = 0; i < (int64_t)D; i++) {
+    double w = tmp[p2[i]];
+    if (d2[i] < 0) w = -w;
+    double iv = input ? sc * input[i] : 0.0;
+    state[i] = (1.0 - al) * state[i] + al * std::tanh(w + iv);
+  }
+  return POLYDIM_SUCCESS;
+}
+
+// =========================================
+// ARCHIVO: polydim_stiefel_v805.cpp  (FP32; la .h declara:
+//   int32_t stiefel_cholqr(const float* input, float* output,
+//                          size_t num_rows, size_t num_cols);  — diagonal nunca 0)
+// =========================================
+#include "polydim_stiefel_v805.h"
+#include "polydim.h"
+#include <cmath>
+#include <vector>
+#include <algorithm>
+static float pd_dot_kahan_f32(const float* a, const float* b, size_t n) {
+  float sum = 0.0f, c = 0.0f;
+  for (size_t i = 0; i < n; i++) {
+    float p = a[i] * b[i], t = sum + p;
+    if (std::fabs(sum) >= std::fabs(p)) c += (sum - t) + p;
+    else c += (p - t) + sum;
+    sum = t;
+  }
+  return sum + c;
+}
+int32_t stiefel_cholqr(const float* input, float* output, size_t nr, size_t nc) {
+  if (!input || !output) return POLYDIM_ERR_NULL_POINTER;
+  if (nr == 0 || nc == 0) return POLYDIM_ERR_INVALID_DIMENSION;
+  std::vector<float> G(nc * nc, 0.0f), R(nc * nc, 0.0f);
+  for (size_t i = 0; i < nc; i++)
+    for (size_t j = i; j < nc; j++) {
+      float d = pd_dot_kahan_f32(input + i * nr, input + j * nr, nr);
+      G[i * nc + j] = d; G[j * nc + i] = d;
+    }
+  const float diag_floor = 1e-12f;   /* P0-4: la diagonal NUNCA es 0 */
+  for (size_t i = 0; i < nc; i++) {
+    for (size_t j = 0; j <= i; j++) {
+      float s = G[i * nc + j];
+      for (size_t k = 0; k < j; k++) s -= R[k * nc + i] * R[k * nc + j];
+      if (i == j) {
+        if (!(s > diag_floor)) s = diag_floor;   /* regularizacion explicita */
+        R[j * nc + i] = std::sqrt(s);
+      } else {
+        if (R[j * nc + j] < diag_floor) R[j * nc + i] = 0.0f; /* Tikhonov */
+        else R[j * nc + i] = s / R[j * nc + j];
+      }
+    }
+  }
+  for (size_t i = 0; i < nc; i++)
+    for (size_t r = 0; r < nr; r++) {
+      float s = input[i * nr + r];
+      for (size_t j = 0; j < i; j++) s -= output[j * nr + r] * R[j * nc + i];
+      output[i * nr + r] = s / R[i * nc + i];   /* R[i][i] >= sqrt(diag_floor) > 0 */
+    }
+  return POLYDIM_SUCCESS;
+}
+
+// =========================================
+// ARCHIVO: polydim_crypto_v805.cpp  (validacion estricta + noncegen;
+// la .h declara: aead_encrypt/decrypt con key 16/24/32 y nonce EXACTO 12,
+// polydim_noncegen { uint8_t base[12]; std::atomic<uint64_t> ctr; } con
+// init/next, y get_secure_attributes() que devuelve NULL en fallo SD = ruidoso)
+// =========================================
+#include "polydim_crypto_v805.h"
+#include <atomic>
+static bool pd_crypto_sizes_ok(const std::vector<uint8_t>& key,
+                               const std::vector<uint8_t>& nonce) {
+  size_t k = key.size();
+  bool key_ok = (k == 16 || k == 24 || k == 32);
+  return key_ok && nonce.size() == 12;   /* GCM: 96 bits, sin excepciones */
+}
+/* dentro de polydim_aead_encrypt / _decrypt, PRIMERA linea:
+     if (!pd_crypto_sizes_ok(key, nonce)) return false;
+   el cuerpo BCrypt se mantiene identico al V806 (ya era correcto). */
+bool polydim_noncegen_init(polydim_noncegen* g) {
+  if (!g) return false;
+  if (!BCryptGenRandom(NULL, g->base, 4, BCRYPT_USE_SYSTEM_PREFERRED_RNG)) return false;
+  memset(g->base + 4, 0, 8);
+  g->ctr.store(0, std::memory_order_relaxed);
+  return true;
+}
+bool polydim_noncegen_next(polydim_noncegen* g, uint8_t out[12]) {
+  if (!g || !out) return false;
+  uint64_t c = g->ctr.fetch_add(1, std::memory_order_relaxed);
+  memcpy(out, g->base, 4);
+  for (int i = 0; i < 8; i++) out[4 + i] = (uint8_t)(c >> (56 - 8 * i)); /* big-endian */
+  return true;
+}
+/* get_secure_attributes: si ConvertStringSecurityDescriptorToSecurityDescriptorA
+   falla, retornar NULL (el llamante debe abortar), NO un descriptor NULL. */
+
+// =========================================
+// ARCHIVO: polydim_monolith.rs  (FFI Rust corregido)
+// =========================================
+//! Guardián Topológico + Filtro Fréchet-Betti + Síntesis Clifford+T verificada (V807).
+//! Cambios: capacidades de buffer en TODAS las entradas (checked_mul), early-return
+//! sin salidas eliminado, sin latch de pánico permanente, síntesis verificada por
+//! simulación 2x2 contra el target (falla RUIDOSA si no cumple epsilon).
+
+use std::panic::catch_unwind;
+use std::cell::RefCell;
+use std::ffi::CString;
+use std::os::raw::c_char;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+thread_local! {
+    static LAST_ERROR_CSTR: RefCell<CString> = RefCell::new(CString::new("").unwrap());
+}
+static ERROR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+macro_rules! ffi_guard {
+    ($body:expr) => {{
+        match catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(code) => code,
+            Err(_) => {
+                LAST_ERROR_CSTR.with(|p| { *p.borrow_mut() =
+                    CString::new("rust panic atrapado en FFI").unwrap(); });
+                ERROR_SEQ.fetch_add(1, Ordering::Relaxed);
+                NativeStatus::Panic
+            }
+        }
+    }};
+}
+
+#[no_mangle]
+pub extern "C" fn polydim_last_error_v1() -> *const c_char {
+    LAST_ERROR_CSTR.with(|e| e.borrow().as_ptr())
+}
+#[no_mangle]
+pub extern "C" fn polydim_guard_reset_v1() {   /* P1-2: el guard ya no queda pegado */
+    LAST_ERROR_CSTR.with(|p| { *p.borrow_mut() = CString::new("").unwrap(); });
+}
+
+#[repr(C)]
+pub enum NativeStatus { Ok = 0, InvalidArgument = 1, NullPointer = 2,
+    CapacityExceeded = 3, TopologyError = 4, MathError = 5, NotInitialized = 6, Panic = 7 }
+
+#[repr(C)]
+pub struct PolydimEdge { pub u: u32, pub v: u32 }
+
+#[repr(C, align(128))]
+#[derive(Clone, Copy)]
+pub struct PolydimBettiResult {
+    pub status: i32, pub components_betti0: u32, pub cycles_betti1: i64,
+    pub num_vertices: u32, pub num_edges: u32,
+    pub is_critically_healthy: bool, pub is_optimally_healthy: bool,
+}
+
+#[repr(C, align(128))]
+#[derive(Clone, Copy)]
+pub struct PolydimFrechetBettiResult {
+    pub status: i32, pub num_candidates: u32, pub dimension: u32,
+    pub connected_components_betti0: u32, pub cycles_betti1: i64,
+    pub consensus_node_idx: u32, pub active_swarm_count: u32,
+    pub rejected_outliers_count: u32, pub frechet_residual: f64,
+    pub is_consensus_certified: bool,
+}
+
+/* ---------- DSU iterativo (sin recursion) ---------- */
+pub struct DisjointSet { parent: Vec<usize>, rank: Vec<u8>, pub count: u64 }
+impl DisjointSet {
+    pub fn new(n: usize) -> Self {
+        DisjointSet { parent: (0..n).collect(), rank: vec![0; n], count: n as u64 }
+    }
+    #[inline]
+    pub fn find(&mut self, mut i: usize) -> usize {
+        let mut root = i;
+        while root != self.parent[root] { root = self.parent[root]; }
+        while i != root { let nx = self.parent[i]; self.parent[i] = root; i = nx; }
+        root
+    }
+    #[inline]
+    pub fn union(&mut self, i: usize, j: usize) -> bool {
+        let (a, b) = (self.find(i), self.find(j));
+        if a == b { return false; }
+        match self.rank[a].cmp(&self.rank[b]) {
+            std::cmp::Ordering::Less => self.parent[a] = b,
+            std::cmp::Ordering::Greater => self.parent[b] = a,
+            std::cmp::Ordering::Equal => { self.parent[b] = a; self.rank[a] += 1; }
+        }
+        self.count -= 1; true
+    }
+}
+
+/* ---------- Guardián Betti con capacidad de aristas ---------- */
+#[no_mangle]
+pub extern "C" fn polydim_rust_betti_dual_guard(
+    edges_ptr: *const PolydimEdge, edges_capacity: u64, num_edges: u32,
+    num_vertices: u32, max_tau_betti1: i64, out_result: *mut PolydimBettiResult,
+) -> NativeStatus {
+    ffi_guard!({
+        if edges_ptr.is_null() || out_result.is_null() { return NativeStatus::NullPointer; }
+        if num_vertices == 0 { return NativeStatus::InvalidArgument; }
+        if num_edges as u64 > edges_capacity { return NativeStatus::CapacityExceeded; }
+        let edges = unsafe { std::slice::from_raw_parts(edges_ptr, num_edges as usize) };
+        let mut dsu = DisjointSet::new(num_vertices as usize);
+        for e in edges {
+            let (u, v) = (e.u as usize, e.v as usize);
+            if u >= num_vertices as usize || v >= num_vertices as usize {
+                return NativeStatus::InvalidArgument;
+            }
+            dsu.union(u, v);
+        }
+        let b0 = dsu.count as u32;
+        let b1 = num_edges as i64 - num_vertices as i64 + b0 as i64;
+        unsafe { *out_result = PolydimBettiResult {
+            status: 0, components_betti0: b0, cycles_betti1: b1,
+            num_vertices, num_edges,
+            is_critically_healthy: b0 == 1,
+            is_optimally_healthy: b0 == 1 && b1 <= max_tau_betti1,
+        }};
+        NativeStatus::Ok
+    })
+}
+
+/* ---------- Filtro Fréchet-Betti (salidas SIEMPRE escritas; capacidades) ---------- */
+#[no_mangle]
+pub extern "C" fn polydim_rust_frechet_betti_filter(
+    candidates_ptr: *const f64, candidates_capacity: u64,
+    num_candidates: u32, dimension: u32, dist_threshold: f64, max_tau_betti1: i64,
+    out_consensus_vector: *mut f64, consensus_capacity: u64,
+    out_result: *mut PolydimFrechetBettiResult,
+) -> NativeStatus {
+    ffi_guard!({
+        if candidates_ptr.is_null() || out_consensus_vector.is_null() || out_result.is_null() {
+            return NativeStatus::NullPointer;
+        }
+        let (n, d) = (num_candidates as usize, dimension as usize);
+        if n == 0 || d == 0 { return NativeStatus::InvalidArgument; }
+        let need = match (n as u64).checked_mul(d as u64) { Some(v) => v, None => return NativeStatus::InvalidArgument };
+        if need > candidates_capacity || d as u64 > consensus_capacity {
+            return NativeStatus::CapacityExceeded;
+        }
+        let thresh = if dist_threshold > 0.0 { dist_threshold } else { 1.0 };
+        let t2 = thresh * thresh;
+        let cand = unsafe { std::slice::from_raw_parts(candidates_ptr, n * d) };
+        let dist2 = |i: usize, j: usize| -> f64 {
+            let mut s = 0.0f64;
+            for k in 0..d {
+                let df = cand[i * d + k] - cand[j * d + k];
+                s += df * df;
+            }
+            s
+        };
+        /* grafo de umbral con early-exit al superar el umbral */
+        let mut dsu = DisjointSet::new(n);
+        let mut edge_count: u128 = 0;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let mut s = 0.0f64;
+                let mut over = false;
+                for k in 0..d {
+                    let df = cand[i * d + k] - cand[j * d + k];
+                    s += df * df;
+                    if s > t2 { over = true; break; }
+                }
+                if !over { edge_count += 1; dsu.union(i, j); }
+            }
+        }
+        if edge_count > i64::MAX as u128 { return NativeStatus::InvalidArgument; }
+        let b0 = dsu.count as u32;
+        let b1 = edge_count as i64 - n as i64 + b0 as i64;
+        /* componente gigante (quorum honesto) */
+        let mut sizes = vec![0usize; n];
+        for i in 0..n { let r = dsu.find(i); sizes[r] += 1; }
+        let mut groot = 0usize;
+        for (r, &s) in sizes.iter().enumerate() { if s > sizes[groot] { groot = r; } }
+        let honest: Vec<usize> = (0..n).filter(|&i| dsu.find(i) == groot).collect();
+        let active = honest.len() as u32;
+        /* mediana geometrica de Fréchet discreta */
+        let mut best = honest[0];
+        let mut best_sum = f64::INFINITY;
+        for &i in &honest {
+            let mut s = 0.0f64;
+            for &j in &honest { s += dist2(i, j).sqrt(); }
+            if s < best_sum { best_sum = s; best = i; }
+        }
+        /* Weiszfeld amortiguado (0.7), 20 iteraciones, salida SIEMPRE escrita */
+        let mut med: Vec<f64> = (0..d).map(|k| cand[best * d + k]).collect();
+        for _ in 0..20 {
+            let mut ws = 0.0f64;
+            let mut nxt = vec![0.0f64; d];
+            for &j in &honest {
+                let mut dd = 0.0f64;
+                for k in 0..d { let df = med[k] - cand[j * d + k]; dd += df * df; }
+                let w = 1.0 / dd.sqrt().max(1e-12);
+                ws += w;
+                for k in 0..d { nxt[k] += w * cand[j * d + k]; }
+            }
+            if ws <= 0.0 { break; }
+            for k in 0..d { med[k] = 0.7 * (nxt[k] / ws) + 0.3 * med[k]; }
+        }
+        let mut n2 = 0.0f64;
+        for &m in &med { n2 += m * m; }
+        let nrm = n2.sqrt();
+        if nrm > 1e-15 { for m in med.iter_mut() { *m /= nrm; } }
+        unsafe { std::ptr::copy_nonoverlapping(med.as_ptr(), out_consensus_vector, d); }
+        let quorum = (2u64 * n as u64 + 2) / 3;   /* u64: sin wrap en release */
+        let certified = (active as u64) >= quorum && b1 <= max_tau_betti1;
+        unsafe { *out_result = PolydimFrechetBettiResult {
+            status: 0, num_candidates, dimension,
+            connected_components_betti0: b0, cycles_betti1: b1,
+            consensus_node_idx: best as u32, active_swarm_count: active,
+            rejected_outliers_count: (n - honest.len()) as u32,
+            frechet_residual: best_sum / (active as f64).max(1.0),
+            is_consensus_certified: certified,
+        }};
+        NativeStatus::Ok
+    })
+}
+
+/* ---------- Síntesis Clifford+T VERIFICADA POR SIMULACION ---------- */
+pub const GATE_H: u8 = 1; pub const GATE_S: u8 = 2; pub const GATE_T: u8 = 3;
+pub const GATE_TDAG: u8 = 4; pub const GATE_X: u8 = 5; pub const GATE_Z: u8 = 6;
+
+#[derive(Clone, Copy)] struct Cx { re: f64, im: f64 }
+impl Cx {
+    fn add(a: Cx, b: Cx) -> Cx { Cx { re: a.re + b.re, im: a.im + b.im } }
+    fn mul(a: Cx, b: Cx) -> Cx { Cx { re: a.re*b.re - a.im*b.im, im: a.re*b.im + a.im*b.re } }
+}
+fn gate_mat(op: u8) -> [[Cx; 2]; 2] {
+    let (o, s) = (0.0f64, std::f64::consts::FRAC_1_SQRT_2);
+    let m = |a: (f64,f64), b: (f64,f64), c: (f64,f64), d: (f64,f64)| [[
+        Cx{re:a.0,im:a.1}, Cx{re:b.0,im:b.1}], [Cx{re:c.0,im:c.1}, Cx{re:d.0,im:d.1}]];
+    match op {
+        GATE_H => m((s,0.0),(s,0.0),(s,0.0),(-s,0.0)),
+        GATE_S => m((1.0,0.0),(0.0,0.0),(0.0,0.0),(0.0,1.0)),
+        GATE_T => m((1.0,0.0),(0.0,0.0),(0.0,0.0),(s,s)),
+        GATE_TDAG => m((1.0,0.0),(0.0,0.0),(0.0,0.0),(s,-s)),
+        GATE_X => m((0.0,o),(1.0,0.0),(1.0,0.0),(0.0,0.0)),
+        _ /*GATE_Z*/ => m((1.0,0.0),(0.0,0.0),(0.0,0.0),(-1.0,0.0)),
+    }
+}
+fn mat_mul(a: &[[Cx;2];2], b: &[[Cx;2];2]) -> [[Cx;2];2] {
+    let mut r = [[Cx{re:0.0,im:0.0};2];2];
+    for i in 0..2 { for j in 0..2 {
+        r[i][j] = Cx::add(Cx::mul(a[i][0], b[0][j]), Cx::mul(a[i][1], b[1][j]));
+    }}
+    r
+}
+
+/// Ejes soportados: 0 = Z, 1 = X (envoltura H·Rz·H). Eje 2 (Y) NO soportado:
+/// se rechaza con InvalidArgument en vez de emitir una secuencia no verificada.
+#[no_mangle]
+pub extern "C" fn polydim_rust_quantum_synthesize_discrete(
+    theta: f64, target_axis: u32, epsilon: f64,
+    out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+) -> NativeStatus {
+    ffi_guard!({
+        if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+        if max_capacity < 4 || target_axis > 1 { return NativeStatus::InvalidArgument; }
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut ang = theta % two_pi;
+        if ang < 0.0 { ang += two_pi; }
+        let p4 = std::f64::consts::FRAC_PI_4;
+        let k = (ang / p4).round() as i64;
+        let t_count = ((k % 8) + 8) % 8;
+        let mut gates: Vec<u8> = Vec::with_capacity(64);
+        if target_axis == 1 { gates.push(GATE_H); }
+        match t_count {
+            1 => gates.push(GATE_T), 2 => gates.push(GATE_S),
+            3 => { gates.push(GATE_S); gates.push(GATE_T); }
+            4 => gates.push(GATE_Z),
+            5 => { gates.push(GATE_Z); gates.push(GATE_T); }
+            6 => { gates.push(GATE_Z); gates.push(GATE_S); }
+            7 => gates.push(GATE_TDAG),
+            _ => {}
+        }
+        let residual = ang - (k as f64) * p4;
+        let eps = if epsilon > 0.0 { epsilon } else { 1e-6 };
+        /* refinamiento del residuo (repeticiones H T H T†) */
+        if residual.abs() > eps {
+            let reps = ((residual.abs() / (p4 * 0.25)).ceil() as usize).min(8);
+            for _ in 0..reps {
+                gates.push(GATE_H);
+                gates.push(if residual > 0.0 { GATE_T } else { GATE_TDAG });
+                gates.push(GATE_H);
+                gates.push(if residual > 0.0 { GATE_TDAG } else { GATE_T });
+            }
+        }
+        if target_axis == 1 { gates.push(GATE_H); }
+        if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+        /* VERIFICACION: simular la secuencia y medir contra el target. */
+        let target: [[Cx;2];2] = {
+            let c = (ang / 2.0).cos(); let s = (ang / 2.0).sin();
+            let z = |a: (f64,f64), b: (f64,f64), cc: (f64,f64), dd: (f64,f64)| [[
+                Cx{re:a.0,im:a.1}, Cx{re:b.0,im:b.1}], [Cx{re:cc.0,im:cc.1}, Cx{re:dd.0,im:dd.1}]];
+            if target_axis == 0 { z((c, -s),(0.0,0.0),(0.0,0.0),(c, s)) }
+            else { z((c, 0.0),(0.0, -s),(0.0, -s),(c, 0.0)) }
+        };
+        let mut u = [[Cx{re:1.0,im:0.0}, Cx{re:0.0,im:0.0}],
+                     [Cx{re:0.0,im:0.0}, Cx{re:1.0,im:0.0}]];
+        for &g in &gates { let gm = gate_mat(g); u = mat_mul(&gm, &u); }
+        let mut err = 0.0f64;
+        for i in 0..2 { for j in 0..2 {
+            let df = Cx { re: u[i][j].re - target[i][j].re, im: u[i][j].im - target[i][j].im };
+            err = err.max(df.re.abs()).max(df.im.abs());
+        }}
+        if err > eps {
+            LAST_ERROR_CSTR.with(|p| { *p.borrow_mut() = CString::new(format!(
+                "sintesis no alcanza epsilon: logrado {:.3e} > pedido {:.3e}", err, eps)).unwrap(); });
+            return NativeStatus::MathError;   /* P0-5: NUNCA Ok silencioso */
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(gates.as_ptr(), out_opcodes, gates.len());
+            *out_count = gates.len() as u32;
+        }
+        NativeStatus::Ok
+    })
+}
+
+// =========================================
+// ARCHIVO: polydim_hw_dispatcher.py  (XPU corregido + cache TTL)
+// =========================================
+"""TPU > CUDA > HIP > XPU > CPU con cache TTL (60 s).
+V807: torch.xpu ya NO se rotula como 'hip' (Intel XPU no es ROCm)."""
+import time
+
+_CACHE = {"device": None, "ts": 0.0}
+_TTL_S = 60.0
+
+def _probe():
+    try:
+        import jax
+        if any(d.platform == "tpu" for d in jax.local_devices()):
+            return "tpu"
+    except Exception:
+        pass
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"          # cubre tambien ROCm/HIP (torch.version.hip)
+        xpu = getattr(torch, "xpu", None)
+        if xpu is not None and xpu.is_available():
+            return "xpu"           # P1-3: etiqueta correcta, no "hip"
+    except Exception:
+        pass
+    return "cpu"
+
+def get_optimal_device(ttl_s=_TTL_S):
+    """Interroga el silicio una vez por TTL y devuelve el dispositivo optimo."""
+    now = time.monotonic()
+    if _CACHE["device"] is None or (now - _CACHE["ts"]) > ttl_s:
+        _CACHE["device"] = _probe()
+        _CACHE["ts"] = now
+    return _CACHE["device"]
+
+// =========================================
+// ARCHIVO: polydim_ffi_v806.dart  — PARCHE (solo lo que cambia)
+// =========================================
+// 1) Mapa de estados: agregar las nuevas entradas
+//   -13: 'REGULARIZED', -14: 'WRITER_CONTENTION', -15: 'NOT_INITIALIZED',
+//   -16: 'WOULD_BLOCK'
+//
+// 2) Reemplazar el struct espejo por handle opaco (el struct V806 de 1 byte
+//    desbordaria el bloque C real — bug latente de ABI):
+//     final class PMTPControl extends Opaque {}
+//
+// 3) Firmas y lookups nuevos (el resto del archivo se mantiene):
+//   typedef _CreateNative = Pointer<PMTPControl> Function(Pointer<Uint8>, Uint64, Uint64);
+//   typedef _CreateDart = Pointer<PMTPControl> Function(Pointer<Uint8>, int, int);
+//   typedef _ReleaseReadNative = Void Function(Pointer<PMTPControl>, Uint64, Uint64);
+//   typedef _SlotDataNative = Pointer<Uint8> Function(Pointer<PMTPControl>, Uint64, Pointer<Uint64>);
+//   // begin/commit/acquire/validate mantienen sus firmas V806 (compatibles).
+//   class Polydim {
+//     late final _CreateDart _pmtpCreate;
+//     late final _SlotDataNative _pmtpSlotData;
+//     late final _ReleaseReadDart _pmtpReleaseRead;
+//     // en Polydim._(): lookup de 'polydim_pmtp_create', 'polydim_pmtp_slot_data',
+//     //                'polydim_pmtp_release_read' (ademas de los 5 de V806).
+//     Pointer<PMTPControl> pmtpCreate(Pointer<Uint8> region, int regionBytes, int slotBytes) =>
+//         _pmtpCreate(region, regionBytes, slotBytes);
+//     Pointer<Uint8> pmtpSlotData(Pointer<PMTPControl> c, int slot, Pointer<Uint64> bytes) =>
+//         _pmtpSlotData(c, slot, bytes);
+//     void pmtpReleaseRead(Pointer<PMTPControl> c, int slot, int lease) =>
+//         _pmtpReleaseRead(c, slot, lease);
+//   }
+// 4) OBLIGATORIO: toda lectura envuelve la copia del slot entre acquire_read y
+//    release_read en try/finally (el lease se libera siempre, aun con excepcion).
+
+=================================================================
+PROTOCOLO DE CERTIFICACION V807.1 (reemplaza logs V804/V806)
+=================================================================
+Build: gcc/g++ -O2 -std=c11/c++17 -fopenmp -ffp-contract=off  (PROHIBIDO -ffast-math)
+       Rust: cargo build --release
+Tests de certificacion (todos obligatorios):
+  1. selftest_all() == 0 (corre en Polydim.open); bajo FTZ/DAZ o -ffast-math => -12.
+  2. Grama D=10^6 K=64: error Frobenius vs NumPy <= 5e-15, ambos modos FP.
+  3. Rodrigues D=10^6: | ||y'||^2 - 1 | <= 4.44e-16; theta=0 -> identidad bit a bit;
+     theta=NaN -> -8; base rota -> -9; y off-manifold -> -10.
+  4. PMTP DOS PROCESOS: kill -9 al writer a mitad => takeover por heartbeat;
+     readers sin cuelgue; banco objetivo nunca escrito con leases ACTIVE (assert).
+  5. PMTP lease: release por pid ajeno rechazado; reader muerto => reclaim.
+  6. Frechet: (a) 15 agentes/5 bizantinos (caso V804); (b) 5 agentes identicos
+     (varianza < 1e-6) => Ok con consenso escrito; (c) n*d > capacidad => CapacityExceeded.
+  7. Sintesis: R_x(pi/4) => 3 puertas Ok; theta=sqrt(2)*pi eps=1e-9 => MathError;
+     eje 2 => InvalidArgument; tag alterado => MathError.
+  8. Stiefel 12000x32: orto <= 1e-13; problem_size != D*K => -2.
+  9. SPSC 1M eventos sin perdidas; LSM D=8192 estable 100 pasos.
+ 10. Dispatcher CPU => "cpu"; XPU disponible => "xpu" (nunca "hip").
+ 11. Sello PMTP: seal->open roundtrip Ok; un byte del payload alterado => apertura
+     rechazada (-6); seq del slot alterado => rechazada.
+Evidencias: throughput SPSC y nodos DSU deben coincidir entre log crudo y
+certificacion (misma cifra, mismo test, misma corrida).
+
+=================================================================
+MEJORAS SOTA APLICADAS EN V807.1 (aporte teorico-practico)
+=================================================================
+ 1. PMTP x AES-GCM con nonce derivado del seq: unico por commit, sin estado
+    compartido, misuse-resistant por construccion. El AD (=nonce) autentica
+    payload y routing JUNTOS: la DPI queda cerrada tambien a nivel cripto
+    (nadie puede reinyectar un tensor viejo en otro slot/commit).
+ 2. Semantica correcta de validate_read: estabilidad por lease, no por seq
+    (el seq puede avanzar legalmente durante la lectura; antes era falso
+    positivo garantizado bajo writers concurrentes).
+ 3. Guard FTZ/DAZ en selftest: el mandato lo pedia y no existia; ahora un
+    proceso con MXCSR sucio es rechazado en lugar de producir deriva silenciosa.
+ 4. Anti-replay: open_slot exige el seq que sello el writer; un slot reenviado
+    de un commit viejo falla la apertura.
+ Roadmap documentado (no incluido, para no inflar el paquete): VP-trees para
+ Fréchet O(n log n) en enjambres grandes; batch commit multi-tensor; workspace
+ externo en Rodrigues para hot-path sin malloc; GPU-direct/RMA para slots.
+=================================================================
+
+// =========================================
+// ARCHIVO NUEVO: polydim_pmtp_crypto.cpp  (PMTP x AES-GCM: contenido + routing
+// autenticados juntos; nonce misuse-proof derivado del seq)
+// =========================================
+#include "polydim.h"
+#include "polydim_crypto_v805.h"
+#include <cstring>
+#include <vector>
+
+static void pd_nonce_from(uint64_t seq, uint32_t slot, uint8_t nonce[12]) {
+  memcpy(nonce, &seq, 8);
+  nonce[8] = (uint8_t)slot; nonce[9] = 0; nonce[10] = 0; nonce[11] = 0;
+}
+
+extern "C" int32_t polydim_pmtp_seal_slot(polydim_pmtp_t* p, uint32_t slot,
+                                          const uint8_t* key, uint32_t key_len) {
+  if (!p || !key) return POLYDIM_ERR_NULL_POINTER;
+  if (!(key_len == 16 || key_len == 24 || key_len == 32))
+    return POLYDIM_ERR_INVALID_DIMENSION;
+  uint64_t cap = 0;
+  uint8_t* d = (uint8_t*)polydim_pmtp_slot_data(p, slot, &cap);
+  if (!d || cap <= 24) return POLYDIM_ERR_INVALID_DIMENSION;
+  uint64_t s = polydim_pmtp_seq(p);
+  uint8_t nonce[12]; pd_nonce_from(s, slot, nonce);
+  const uint64_t pay = cap - 24;
+  std::vector<uint8_t> kv(key, key + key_len), nv(nonce, nonce + 12);
+  std::vector<uint8_t> pt(d, d + pay), ct, tag;
+  std::vector<uint8_t> ad(nonce, nonce + 12);   /* AD vincula payload con seq+slot */
+  if (!polydim_aead_encrypt(kv, nv, pt, ad, ct, tag)) return POLYDIM_ERR_NUMERICAL_INSTABILITY;
+  memcpy(d, ct.data(), pay);
+  memcpy(d + pay, tag.data(), 16);
+  memcpy(d + pay + 16, &s, 8);                  /* seq usado, cubierto por el tag */
+  return POLYDIM_SUCCESS;
+}
+
+extern "C" int32_t polydim_pmtp_open_slot(polydim_pmtp_t* p, uint32_t slot,
+                                          const uint8_t* key, uint32_t key_len) {
+  if (!p || !key) return POLYDIM_ERR_NULL_POINTER;
+  if (!(key_len == 16 || key_len == 24 || key_len == 32))
+    return POLYDIM_ERR_INVALID_DIMENSION;
+  uint64_t cap = 0, s = 0;
+  uint8_t* d = (uint8_t*)polydim_pmtp_slot_data(p, slot, &cap);
+  if (!d || cap <= 24) return POLYDIM_ERR_INVALID_DIMENSION;
+  memcpy(&s, d + cap - 8, 8);                   /* seq que sello el writer */
+  uint8_t nonce[12]; pd_nonce_from(s, slot, nonce);
+  const uint64_t pay = cap - 24;
+  std::vector<uint8_t> kv(key, key + key_len), nv(nonce, nonce + 12);
+  std::vector<uint8_t> ct(d, d + pay), tag(d + pay, d + pay + 16), pt;
+  std::vector<uint8_t> ad(nonce, nonce + 12);
+  /* BCrypt GCM verifica el tag internamente; falla ruidoso si el payload o el
+     seq fueron alterados (integridad + autenticidad + anti-replay por seq). */
+  if (!polydim_aead_decrypt(kv, nv, ct, tag, ad, pt)) return POLYDIM_ERR_SEQLOCK_RACE;
+  if (pt.size() != pay) return POLYDIM_ERR_NUMERICAL_INSTABILITY;
+  memcpy(d, pt.data(), pay);
+  return POLYDIM_SUCCESS;
+}

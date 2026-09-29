@@ -61,7 +61,7 @@ class PolydimRiemannJITEngine:
                 y_norm = y / np.linalg.norm(y)
                 
                 # Rodrigues projection
-                y_next = math.cos(theta) * y_norm + (math.sin(theta) / kappa) * v_unit
+                y_next = math.cos(theta) * y_norm + math.sin(theta) * v_unit
                 return y_next / np.linalg.norm(y_next)
 
             compiled_fn = spherical_kernel

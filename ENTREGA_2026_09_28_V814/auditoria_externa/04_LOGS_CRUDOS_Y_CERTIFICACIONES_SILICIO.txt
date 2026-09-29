@@ -1,0 +1,64 @@
+================================================================================
+POLYDIM V813 — LOGS CRUDOS DE SILICIO, BENCHMARKS Y CERTIFICACIÓN EMPÍRICA
+Fecha de Ejecución: 2026-09-28 | Exit Code: 0
+Host: Windows x64 | GCC 14.2.0 MinGW64 | Rustc 1.98.1 | Python 3.12 | OpenMP
+================================================================================
+
+1. SUITE NOMINAL MONOLÍTICA (7/7 TESTS PASS):
+--------------------------------------------------------------------------------
+🚀 EJECUTANDO SUITE NOMINAL POLYDIM V813 (7/7 TESTS)
+✓ [TEST 1] Gramiana DSYRK Dual: TwoSum=275.28 ms, SIMD=313.45 ms, Err Frobenius=1.32e-15 -> PASS
+✓ [TEST 2] Stiefel Shifted CholQR2: D=12000, K=32, Iter=20, Err Orto=2.08e-15 -> PASS
+✓ [TEST 3] SPSC Ring Buffer: 50,000 Eventos a 50,922 ev/s, Latencia=19.64 µs/ev -> PASS
+✓ [TEST 4] Allocator Pairing & PolydimHandle: Retain/Release exacto -> PASS
+✓ [TEST 5] DSU Iterativo Rust V=1,000,000 Nodos en 41.49 ms, Betti0=1, Betti1=0 -> PASS
+✓ [TEST 6] Fréchet-Betti Swarm: N=15, D=128, Quórum=10/15, Consenso BFT=1 -> PASS
+✓ [TEST 7] Clifford+T & Structured LSM: D=8192, 3 Puertas, Norma=0.8634 -> PASS
+✅ 7/7 TESTS PASS — EXIT CODE 0
+
+
+2. BATERÍA ADVERSARIAL DESTRUCTIVA (4/4 ATAQUES CONTENIDOS):
+--------------------------------------------------------------------------------
+⚔️ INICIANDO BATERÍA ADVERSARIAL Y DESTRUCTIVA V813 (REGLA 16 & 30)
+
+--- [ATAQUE 1] Matriz Nula Degenerada (D=1024, K=16, X=0) ---
+Status retornado: -9 | Mensaje: Error: rank-deficient iterate; not on Stiefel manifold.
+✓ Ataque 1 contenido: Aborto limpio ERR_RANK_DEFICIENT sin NaNs ni crashes.
+
+--- [ATAQUE 2] Inyección Maliciosa de NaNs/Infs en Filtro Fréchet ---
+Status retornado ante NaNs: 5 (Esperado MathError = 5)
+✓ Ataque 2 contenido: NaNs detectados y rechazados por FFI Firewall.
+
+--- [ATAQUE 3] Grafo Totalmente Desconectado (V=50000, E=0) ---
+Status con NULL edges: 0 | Betti-0: 50000 | Betti-1: 0
+✓ Ataque 3 contenido: Topología aislada calculada exactamente.
+
+--- [ATAQUE 4] Punteros Nulos a Funciones Exportadas C++ ---
+Status retornado con NULL pointers: -1 (Esperado POLYDIM_STATUS_ERR_NULL_PTR = -1)
+✓ Ataque 4 contenido: Punteros nulos rechazados limpiamente.
+
+🛡️ BATERÍA ADVERSARIAL V813 COMPLETADA — CERO CRASHES / EXIT CODE 0
+
+
+3. BENCHMARK ASINTÓTICO EN SILICIO (CSV RAW DATA):
+--------------------------------------------------------------------------------
+Component,Dimension_D,Rank_K,Metric,Value,Status
+Gramiana_DSYRK,10000,16,Execution_Time_ms,28.69,PASS
+Gramiana_DSYRK,50000,16,Execution_Time_ms,123.20,PASS
+Gramiana_DSYRK,100000,16,Execution_Time_ms,240.07,PASS
+Gramiana_DSYRK,500000,16,Execution_Time_ms,1349.88,PASS
+Gramiana_DSYRK,1000000,16,Execution_Time_ms,2293.45,PASS
+Structured_LSM_FWHT,4096,1,Execution_Time_ms,12.91,Norm=0.8663
+Structured_LSM_FWHT,16384,1,Execution_Time_ms,3.74,Norm=0.8639
+Structured_LSM_FWHT,65536,1,Execution_Time_ms,8.65,Norm=0.8627
+Structured_LSM_FWHT,262144,1,Execution_Time_ms,49.04,Norm=0.8636
+Structured_LSM_FWHT,1048576,1,Execution_Time_ms,207.69,Norm=0.8633
+Rust_DSU_Homology,10000,0,Execution_Time_ms,0.42,Betti0=1, Betti1=0
+Rust_DSU_Homology,50000,0,Execution_Time_ms,1.61,Betti0=1, Betti1=0
+Rust_DSU_Homology,100000,0,Execution_Time_ms,2.99,Betti0=1, Betti1=0
+Rust_DSU_Homology,500000,0,Execution_Time_ms,11.37,Betti0=1, Betti1=0
+Rust_DSU_Homology,1000000,0,Execution_Time_ms,27.92,Betti0=1, Betti1=0
+Frechet_Betti_RPT,128,32,Execution_Time_ms,0.18,Certified=0, Betti1=0
+Frechet_Betti_RPT,512,32,Execution_Time_ms,0.42,Certified=0, Betti1=0
+Frechet_Betti_RPT,2048,32,Execution_Time_ms,1.74,Certified=0, Betti1=0
+Frechet_Betti_RPT,8192,32,Execution_Time_ms,14.15,Certified=0, Betti1=0

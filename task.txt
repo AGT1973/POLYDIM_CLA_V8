@@ -1,0 +1,14 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V804 - SEQLOCKS AND CONCURRENCY
+CONTEXT: C++ Lock-free telemetry and IPC synchronization.
+CRITICAL ERRORS TO FIX (Category K):
+K-1: Atomic fields in PmtpHeaderV804 struct cause ABI mismatch. Rust/Python see non-atomic fields.
+K-2: No Seqlock implementation despite spec requirement (rigtorp/Seqlock style with acquire/release fences).
+
+INSTRUCTIONS FOR SUBAGENT:
+1. Open E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V804\kernel_cpp_v804.cpp
+2. Fix PmtpHeaderV804: Remove std::atomic from the struct fields. Use raw uint64_t for producer_epoch, data_seq, space_seq. Use reinterpret_cast<std::atomic<uint64_t>*> in the C++ functions when reading/writing them.
+3. Implement a Seqlock for payload reading/writing. 
+   - Write: seq.store(seq + 1, release); payload_write(); seq.store(seq + 1, release);
+   - Read: do { s1 = seq.load(acquire); payload_read(); s2 = seq.load(acquire); } while(s1 & 1 || s1 != s2);
+4. Overwrite the .cpp file.
+5. Return ONLY "SLAB_ID: SL

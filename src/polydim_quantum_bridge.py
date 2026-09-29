@@ -137,9 +137,6 @@ class PolydimQuantumBridge:
                 if gate != "id":
                     lines.append(f"{gate} q[{qb}];")
             
-            # Add continuous exact Rz for modern fractional-gate QPUs (IBM Heron / Eagle / Quantinuum)
-            lines.append(f"rz({angle:.6f}) q[{qb}];")
-            
             lines.append(f"cx q[{qa}], q[{qb}];")
             lines.append(f"h q[{qa}];")
 

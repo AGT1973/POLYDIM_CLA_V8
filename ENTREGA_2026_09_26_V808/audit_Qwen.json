@@ -1,0 +1,128 @@
+[
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 102,
+        "severity": "warning",
+        "description": "The function `polydim_stream_copy_nt` uses `_mm_sfence()` which is specific to x86/x86-64. Consider adding a fallback for other architectures.",
+        "fix": "Add a fallback for non-x86 architectures using `std::atomic_thread_fence(std::memory_order_seq_cst);`."
+    },
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 154,
+        "severity": "warning",
+        "description": "The function `polydim_alloc_aligned` sets the alignment to 64 if the requested alignment is less than `sizeof(void*)`. This might not be optimal for all use cases.",
+        "fix": "Consider allowing the user to specify the alignment and only enforce a minimum alignment of `sizeof(void*)`."
+    },
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 224,
+        "severity": "warning",
+        "description": "The function `polydim_spsc_init` does not check if the allocated buffer is aligned to 128 bytes. This could lead to undefined behavior if the allocation fails to meet the alignment requirement.",
+        "fix": "Add a check to ensure the allocated buffer is aligned to 128 bytes before proceeding."
+    },
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 345,
+        "severity": "warning",
+        "description": "The function `polydim_gram_dsyrk` uses a fixed buffer size of `D` for the `products` vector. This might not be optimal for large `D` values.",
+        "fix": "Consider using a dynamically allocated buffer or a more efficient reduction method to handle large `D` values."
+    },
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 445,
+        "severity": "warning",
+        "description": "The function `solve_linear_system_general` uses a fixed pivot threshold of `1e-15 * scale + 1e-300`. This might not be optimal for all matrices and could lead to numerical instability.",
+        "fix": "Consider allowing the user to specify a custom pivot threshold or dynamically adjust the threshold based on the matrix properties."
+    },
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 545,
+        "severity": "warning",
+        "description": "The function `project_to_tangent_space` uses a fixed buffer size of `256` for the `row` array. This might not be optimal for large `K` values.",
+        "fix": "Consider using a dynamically allocated buffer or a more efficient reduction method to handle large `K` values."
+    },
+    {
+        "file": "kernel_cpp_v808_1.cpp",
+        "line": 645,
+        "severity": "warning",
+        "description": "The function `polydim_stiefel_optimize` uses a fixed maximum number of iterations of `100` if the user does not specify a value. This might not be optimal for all optimization problems.",
+        "fix": "Consider allowing the user to specify a custom maximum number of iterations or dynamically adjust the maximum based on the problem complexity."
+    },
+    {
+        "file": "kernel_rust_v808_1.rs",
+        "line": 102,
+        "severity": "warning",
+        "description": "The function `polydim_rust_betti_dual_guard` does not handle the case where `num_edges` is zero and `edges_ptr` is not `NULL`. This could lead to undefined behavior.",
+        "fix": "Add a check to handle the case where `num_edges` is zero and `edges_ptr` is not `NULL`."
+    },
+    {
+        "file": "kernel_rust_v808_1.rs",
+        "line": 202,
+        "severity": "warning",
+        "description": "The function `polydim_rust_frechet_betti_filter` uses a fixed threshold of `1.0` if `dist_threshold` is not specified. This might not be optimal for all datasets.",
+        "fix": "Consider allowing the user to specify a custom distance threshold or dynamically adjust the threshold based on the dataset properties."
+    },
+    {
+        "file": "kernel_rust_v808_1.rs",
+        "line": 302,
+        "severity": "warning",
+        "description": "The function `polydim_rust_quantum_synthesize_discrete` uses a fixed epsilon of `1e-6` if `epsilon` is not specified. This might not be optimal for all quantum synthesis problems.",
+        "fix": "Consider allowing the user to specify a custom epsilon or dynamically adjust the epsilon based on the problem requirements."
+    },
+    {
+        "file": "pmtp_rcu_v808_1.cpp",
+        "line": 102,
+        "severity": "warning",
+        "description": "The function `pmtp_banked_slot_acquire_writer` uses a fixed timeout of `1` second for draining the bank. This might not be optimal for all use cases.",
+        "fix": "Consider allowing the user to specify a custom timeout or dynamically adjust the timeout based on the system load."
+    },
+    {
+        "file": "pmtp_rcu_v808_1.cpp",
+        "line": 202,
+        "severity": "warning",
+        "description": "The function `pmtp_banked_slot_commit_writer` does not handle the case where the `write_bank` is out of bounds. This could lead to undefined behavior.",
+        "fix": "Add a check to ensure `write_bank` is within the valid range before proceeding."
+    },
+    {
+        "file": "ipc_futex_v808_1.cpp",
+        "line": 102,
+        "severity": "warning",
+        "description": "The function `pmtp_futex_shared_init` uses a fixed magic number `PMTP_FUTEX_MAGIC` to validate the initialization. This might not be unique enough for all use cases.",
+        "fix": "Consider using a more unique magic number or a UUID to ensure the initialization is valid."
+    },
+    {
+        "file": "ipc_futex_v808_1.cpp",
+        "line": 202,
+        "severity": "warning",
+        "description": "The function `polydim_futex_wait_v808_1` uses a fixed timeout of `1` second if `timeout_ms` is not specified. This might not be optimal for all use cases.",
+        "fix": "Consider allowing the user to specify a custom timeout or dynamically adjust the timeout based on the system load."
+    },
+    {
+        "file": "test_v808_1_abi_and_ipc.py",
+        "line": 102,
+        "severity": "warning",
+        "description": "The test `test_spsc_payload_coherence` uses a fixed number of iterations `N = 50000`. This might not be optimal for all test environments.",
+        "fix": "Consider allowing the user to specify a custom number of iterations or dynamically adjust the number based on the test environment."
+    },
+    {
+        "file": "test_v808_1_abi_and_ipc.py",
+        "line": 202,
+        "severity": "warning",
+        "description": "The test `test_rcu_bank_rotation` uses a fixed number of cycles `6`. This might not be optimal for all test environments.",
+        "fix": "Consider allowing the user to specify a custom number of cycles or dynamically adjust the number based on the test environment."
+    },
+    {
+        "file": "test_v808_1_quantum_and_honesty.py",
+        "line": 102,
+        "severity": "warning",
+        "description": "The test `test_quantum_unitary_correctness` uses a fixed set of angles `[0.0, np.pi/8, np.pi/4, np.pi/2, np.pi, 3.7]`. This might not be comprehensive enough for all test cases.",
+        "fix": "Consider using a more comprehensive set of angles or dynamically generate angles to ensure thorough testing."
+    },
+    {
+        "file": "test_v808_1_quantum_and_honesty.py",
+        "line": 202,
+        "severity": "warning",
+        "description": "The test `test_dsu_timing_honesty` uses a fixed number of vertices `1_000_000`. This might not be optimal for all test environments.",
+        "fix": "Consider allowing the user to specify a custom number of vertices or dynamically adjust the number based on the test environment."
+    }
+]

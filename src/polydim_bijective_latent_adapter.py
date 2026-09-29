@@ -70,7 +70,7 @@ class PolydimBijectiveLatentAdapter:
         # Project direction to S^(D-1)
         u_polydim_raw = np.dot(W_JL, u_src)
         norm_poly = np.linalg.norm(u_polydim_raw)
-        u_polydim = u_polydim_raw / norm_poly
+        u_polydim = u_polydim_raw / norm_poly if norm_poly > 1e-15 else u_polydim_raw
         
         return u_polydim, rho
 

@@ -1,0 +1,11 @@
+[package]
+name = "polydim_guard807"
+version = "0.1.0"
+edition = "2021"
+publish = false
+[lib]
+path = "src/guard.rs"
+crate-type = ["cdylib", "rlib"]
+[profile.release]
+panic = "unwind"
+overflow-checks = true

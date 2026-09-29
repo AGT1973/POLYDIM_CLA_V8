@@ -1,0 +1,20 @@
+Component,Dimension_D,Rank_K,Metric,Value,Status
+Gramiana_DSYRK,10000,16,Execution_Time_ms,24.106500000925735,PASS
+Gramiana_DSYRK,50000,16,Execution_Time_ms,141.16090000607073,PASS
+Gramiana_DSYRK,100000,16,Execution_Time_ms,246.0927000211086,PASS
+Gramiana_DSYRK,500000,16,Execution_Time_ms,974.6889999951236,PASS
+Gramiana_DSYRK,1000000,16,Execution_Time_ms,1941.196800005855,PASS
+Structured_LSM_FWHT,4096,1,Execution_Time_ms,0.02479998511262238,Norm=1.0000
+Structured_LSM_FWHT,16384,1,Execution_Time_ms,0.01400001929141581,Norm=1.0000
+Structured_LSM_FWHT,65536,1,Execution_Time_ms,0.02609999501146376,Norm=1.0000
+Structured_LSM_FWHT,262144,1,Execution_Time_ms,0.01379998866468668,Norm=1.0000
+Structured_LSM_FWHT,1048576,1,Execution_Time_ms,0.01650000922381878,Norm=1.0000
+Rust_DSU_Homology,10000,0,Execution_Time_ms,0.35879999632015824,"Betti0=1, Betti1=0"
+Rust_DSU_Homology,50000,0,Execution_Time_ms,3.560699988156557,"Betti0=1, Betti1=0"
+Rust_DSU_Homology,100000,0,Execution_Time_ms,2.21800000872463,"Betti0=1, Betti1=0"
+Rust_DSU_Homology,500000,0,Execution_Time_ms,12.131700001191348,"Betti0=1, Betti1=0"
+Rust_DSU_Homology,1000000,0,Execution_Time_ms,65.45059999916703,"Betti0=1, Betti1=0"
+Frechet_Betti_RPT,128,32,Execution_Time_ms,0.19150000298395753,"Certified=0, Betti1=0"
+Frechet_Betti_RPT,512,32,Execution_Time_ms,0.5364000098779798,"Certified=0, Betti1=0"
+Frechet_Betti_RPT,2048,32,Execution_Time_ms,9.708300000056624,"Certified=0, Betti1=0"
+Frechet_Betti_RPT,8192,32,Execution_Time_ms,26.57250000629574,"Certified=0, Betti1=0"

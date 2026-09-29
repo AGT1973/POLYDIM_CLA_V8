@@ -1,0 +1,23 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V805 - IPC SYNCHRONIZATION (PHASE 1)
+CONTEXT: We are destroying the monolith. We need a robust, cross-platform IPC synchronization module.
+TARGET FILE: E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\src\ipc\polydim_ipc_v805.cpp
+
+CRITICAL ERRORS TO FIX (Category A):
+A-1: WaitOnAddress used for cross-process without fallback to Named Event/Semaphore. No escalation on timeout.
+A-2: macOS polydim_futex_wait_v804 stub empty; no proper wait implementation.
+A-3: Missing polydim_futex_wake function; producer cannot notify consumer.
+A-5: Spin cross-process is of 2000 fixed iterations, not adaptive.
+
+INSTRUCTIONS FOR SUBAGENT:
+1. Read the old monolith E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\src\polydim_monolith.cpp for context.
+2. Create src\ipc\polydim_ipc_v805.cpp and src\ipc\polydim_ipc_v805.h.
+3. Implement polydim_futex_wait_v805(addr, expected_val, timeout_ms):
+   - Windows: Spin adaptively, then WaitOnAddress.
+   - Linux: SYS_futex.
+   - macOS: Use __ulock_wait (UL_COMPARE_AND_WAIT).
+4. Implement polydim_futex_wake_v805(addr, wake_all):
+   - Windows: WakeByAddressSingle / WakeByAddressAll.
+   - Linux: SYS_futex (FUTEX_WAKE).
+   - macOS: __ulock_wake (UL_COMPARE_AND_WAIT).
+5. Output code cleanly in the designated files.
+6. Return ONLY "SLAB_ID: SLAB_IPC_DONE, TENSOR_READY".

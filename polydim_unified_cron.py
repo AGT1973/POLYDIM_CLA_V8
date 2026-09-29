@@ -8,7 +8,7 @@ Tareas:
   3. Watchdog Teoría: Detecta cambios prácticos → INBOX_TEORIA.md
 
 Instalación (PowerShell admin, UNA sola vez):
-  schtasks /create /tn "POLYDIM_Unified_Cron" /tr "python E:\\POLYDIM_EINSOF\\polydim_unified_cron.py" /sc MINUTE /mo 30 /f
+  schtasks /create /tn "POLYDIM_Unified_Cron" /tr "python E:\\POLYDIM_EINSOF\\polydim_unified_cron.py" /sc MINUTE /mo 60 /f
   
 Desinstalación:
   schtasks /delete /tn "POLYDIM_Unified_Cron" /f
@@ -38,7 +38,7 @@ WATCHDOG_STATE = THEORY_DIR / ".watchdog_state.json"
 
 # Mail config
 MAIL_SECRETS = EMAIL_DIR / ".secrets"
-MAIL_VAULTS = ["account_a2a", "account_sota", "account_clone"]
+MAIL_VAULTS = ["account_a2a", "account_sota", "account_cursos_ai", "account_clone"]
 MAIL_INBOX = EMAIL_DIR / "AGENT_INBOX"
 MAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -77,6 +77,50 @@ def log(msg: str):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(line)
 
+def get_openrouter_key():
+    env_file = Path(r"C:\Users\eluithi\.gemini\config\.env_paid_keys")
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.startswith("OPENROUTER_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    return None
+
+def summarize_email(subject, sender, body):
+    key = get_openrouter_key()
+    if not key:
+        return "[Error: API key de OpenRouter no encontrada]"
+    
+    try:
+        import requests
+    except ImportError:
+        return "[Error: requests no instalado]"
+        
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "HTTP-Referer": "https://github.com/AGT1973",
+        "X-Title": "POLYDIM"
+    }
+    prompt = f"Resume el siguiente correo en una sola viñeta muy breve (máx 15 palabras). De: {sender}, Asunto: {subject}. Texto: {body[:1500]}"
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": "meta-llama/llama-3.1-8b-instruct:free",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 60,
+                "temperature": 0.0
+            },
+            timeout=10
+        )
+        data = response.json()
+        if "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"].strip()
+        else:
+            return "[Error OpenRouter API]"
+    except Exception as e:
+        return f"[Fallo OpenRouter: {e}]"
+
 
 # ===========================
 # TAREA 1: MAIL
@@ -103,7 +147,7 @@ def task_mail():
             service = build('gmail', 'v1', credentials=creds)
 
             results = service.users().messages().list(
-                userId='me', labelIds=['INBOX', 'UNREAD']
+                userId='me', labelIds=['INBOX', 'UNREAD'], maxResults=5
             ).execute()
             messages = results.get('messages', [])
 
@@ -136,7 +180,9 @@ def task_mail():
                     body = _extract_text(msg.get('payload', {}))
                     clean_subj = re.sub(r'[^a-zA-Z0-9_\-]', '_', subject)[:50]
                     file_name = f"TASK_{vault}_{msg_id}_{clean_subj}.md"
-                    file_path = MAIL_INBOX / file_name
+                    historico_dir = EMAIL_DIR / "_HISTORICO_MAIL"
+                    historico_dir.mkdir(parents=True, exist_ok=True)
+                    file_path = historico_dir / file_name
 
                     content = f"""# TAREA / INGESTA A2A
 **Cuenta:** {vault}
@@ -151,6 +197,22 @@ def task_mail():
 """
                     file_path.write_text(content, encoding='utf-8')
 
+                    summary = summarize_email(subject, sender, body)
+                    consolidado = EMAIL_DIR / "INBOX_CONSOLIDADO.md"
+                    with open(consolidado, "a", encoding="utf-8") as f:
+                        f.write(f"- **{date_str} | {vault} | {sender}**: {summary} (Ref: `{file_name}`)\n")
+
+                    # ⚡ REACTOR DE EVENTOS ACTIONABLE (Zero-Waste / Auto-Discovery)
+                    try:
+                        import sys
+                        sys.path.append(str(EMAIL_DIR / "utils"))
+                        from mail_event_reactor import react_to_email
+                        actions = react_to_email(sender, subject, body, vault, msg_id)
+                        if actions:
+                            log(f"EVENT REACTOR [{vault}]: Acciones ejecutadas: {actions}")
+                    except Exception as react_err:
+                        log(f"EVENT REACTOR ERROR: {react_err}")
+
                     # Marcar como leído
                     service.users().messages().modify(
                         userId='me', id=msg_id,
@@ -160,7 +222,25 @@ def task_mail():
                 except Exception as msg_e:
                     log(f"MAIL [{vault}]: Error procesando msg {msg_id}: {msg_e}")
         except Exception as e:
-            log(f"MAIL [{vault}]: Error de conexión: {e}")
+            err_str = str(e)
+            if "invalid_grant" in err_str or "Token has been expired or revoked" in err_str:
+                # Auto-eliminar token revocado para detener el loop perpetuo de reintentos
+                try:
+                    token_path.unlink()
+                    log(f"MAIL [{vault}]: ⚠️ TOKEN REVOCADO — token.json eliminado. Re-autenticar manualmente con OAuth para restaurar esta cuenta.")
+                except OSError:
+                    log(f"MAIL [{vault}]: ⚠️ TOKEN REVOCADO pero no se pudo eliminar token.json: {token_path}")
+            else:
+                log(f"MAIL [{vault}]: Error de conexión: {e}")
+
+    # Ejecutar auto-purga de correos viejos (> 7 días) preservando links técnicos
+    try:
+        import sys
+        sys.path.append(str(EMAIL_DIR / "utils"))
+        from prune_and_extract_links import prune_and_extract
+        prune_and_extract()
+    except Exception as prune_err:
+        log(f"PRUNE MAIL ERROR: {prune_err}")
 
     if total_count > 0:
         log(f"MAIL: {total_count} correos procesados a {MAIL_INBOX}")

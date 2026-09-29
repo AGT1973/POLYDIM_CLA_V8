@@ -1,0 +1,13 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V805 - PHASE 2 (FFI SAFETY)
+TARGET: E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\src\polydim_monolith.rs
+
+CRITICAL ERRORS TO FIX (Category B):
+B-5: No opaque ABI polydim_engine_t.
+B-6: No polydim_last_error_v1() function.
+B-7: NativeStatus enum not used, magic ints used (-1, -99).
+
+INSTRUCTIONS:
+1. Define #[repr(C)] pub struct polydim_engine_t { _private: [u8; 0] }.
+2. Expose polydim_last_error_v1() -> *const c_char.
+3. Create #[repr(C)] pub enum NativeStatus { Ok=0, InvalidArgument=1, ..., Panic=7 } and return it instead of i32 from all extern "C" functions.
+4. Return ONLY "SLAB_ID: SLAB_FFI2_DONE, TENSOR_READY".

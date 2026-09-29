@@ -4,9 +4,9 @@ import json
 import os
 
 API_KEYS = {
-    "cerebras": "REDACTED",
-    "deepseek": "REDACTED",
-    "openrouter": "REDACTED"
+    "cerebras": os.environ.get("CEREBRAS_API_KEY", ""),
+    "deepseek": os.environ.get("DEEPSEEK_API_KEY", ""),
+    "openrouter": os.environ.get("OPENROUTER_API_KEY", "")
 }
 
 def call_llm(name, url, headers, payload):

@@ -1,0 +1,18 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V804 - FFI PANIC FIREWALL
+CONTEXT: We are building a Stiefel manifold optimizer (Cayley-SMW) with a Rust topological consensus filter.
+The C++/Rust code is an FFI backend for a Python orchestrator.
+PROBLEM: If Rust panics, Python crashes or leaks memory. The 2000 lines lack this critical firewall.
+
+CRITICAL ERRORS TO FIX (Category B):
+B-1: Rust Guard lacks thread_local! LAST_ERROR storing detailed error messages.
+B-2: Rust ffi_guard! does not call mem::forget on payload after catch_unwind (causes double free).
+B-3: No instance state machine (AtomicU8 tainting) to mark panicked instances as tainted.
+
+INSTRUCTIONS FOR SUBAGENT:
+1. Open E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V804\kernel_rust_v804.rs
+2. Implement thread_local! { static LAST_ERROR: RefCell<String> }
+3. Update ffi_guard! to catch unwind, store the error string in LAST_ERROR, and mem::forget the payload if applicable.
+4. Implement a global AtomicU8 STATE (0=Healthy, 2=Tainted) that gets set to 2 on panic. Check this state at the entry of every extern C function.
+5. Provide a polydim_last_error_v1() extern C function.
+6. Overwrite the .rs file. Do NOT output code in the chat.
+7. Return ONLY "SLAB_ID: SLAB_FFI_DONE, TENSOR_READY" in the chat.

@@ -1,0 +1,25 @@
+{
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "numpy": "2.3.5",
+  "measurements": [
+    {
+      "D": 10000,
+      "seconds": 0.0002529909997974755,
+      "norm_squared_error": 4.163336342344337e-17,
+      "max_coordinate_error": 1.734723475976807e-18
+    },
+    {
+      "D": 1000000,
+      "seconds": 0.0215030320000551,
+      "norm_squared_error": 4.163336342344337e-17,
+      "max_coordinate_error": 2.168404344971009e-19
+    },
+    {
+      "D": 10000000,
+      "seconds": 0.1909078280000358,
+      "norm_squared_error": 3.946495907847236e-17,
+      "max_coordinate_error": 5.421010862427522e-20
+    }
+  ],
+  "scope": "new V807 CPU Rodrigues; dense y, sparse orthonormal basis; not universal bound"
+}

@@ -21,7 +21,7 @@ def pmtp_reduce_final(p_sums_ptr, final_norm_ptr, nblocks, BLOCK: tl.constexpr):
 @triton.jit
 def pmtp_normalize(x_ptr, out_ptr, final_norm_ptr, dim, BLOCK_SIZE: tl.constexpr):
     total = tl.load(final_norm_ptr).to(tl.float64)
-    inv = tl.full((), 1.0, tl.float64) / tl.sqrt(total)
+    inv = tl.full((), 1.0, tl.float64) / tl.sqrt(tl.maximum(total, 1e-300))
     pid = tl.program_id(0).to(tl.int64)
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     m = offs < dim

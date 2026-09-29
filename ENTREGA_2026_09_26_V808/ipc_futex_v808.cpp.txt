@@ -1,0 +1,125 @@
+/**
+ * @file polydim_ipc_v805.cpp / ipc_futex_v808.cpp
+ * @brief Cross-Process Native Futex Synchronization (Windows Named Events + Linux FUTEX + Darwin ULock)
+ * @copyright POLYDIM Industrial Architecture - 2026
+ */
+
+#include "polydim_ipc_v805.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <stdio.h>
+#pragma comment(lib, "synchronization.lib")
+
+static HANDLE get_or_create_named_event(volatile uint32_t* addr) {
+    char event_name[128];
+    uintptr_t addr_val = reinterpret_cast<uintptr_t>(addr);
+    snprintf(event_name, sizeof(event_name), "Local\\PolydimFutex_%llx", (unsigned long long)addr_val);
+
+    // Evento manual reset con seguridad nula para acceso cross-process
+    HANDLE hEvent = CreateEventA(NULL, TRUE, FALSE, event_name);
+    return hEvent;
+}
+#elif defined(__linux__)
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
+#include <time.h>
+#include <limits.h>
+#elif defined(__APPLE__)
+extern "C" int __ulock_wait(uint32_t operation, void *addr, uint64_t value, uint32_t timeout_us);
+extern "C" int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
+#define UL_COMPARE_AND_WAIT 1
+#define ULF_WAKE_ALL 0x00000100
+#endif
+
+extern "C" int32_t polydim_futex_wait_v805(volatile uint32_t* addr, uint32_t expected_val, uint32_t timeout_ms) {
+    if (!addr) return -1;
+
+#if defined(_WIN32)
+    // 1. Adaptive High-Resolution Spin Wait
+    uint32_t spin_limit = 4000;
+    for (uint32_t i = 0; i < spin_limit; ++i) {
+        if (*addr != expected_val) return 0;
+        YieldProcessor();
+    }
+
+    // 2. Cross-Process Fallback: Named Event
+    HANDLE hEvent = get_or_create_named_event(addr);
+    if (hEvent != NULL) {
+        if (*addr != expected_val) {
+            CloseHandle(hEvent);
+            return 0;
+        }
+        DWORD timeout = (timeout_ms == 0xFFFFFFFF) ? INFINITE : timeout_ms;
+        DWORD wait_res = WaitForSingleObject(hEvent, timeout);
+        ResetEvent(hEvent);
+        CloseHandle(hEvent);
+        if (wait_res == WAIT_TIMEOUT) return 1;
+        if (wait_res == WAIT_OBJECT_0) return 0;
+    }
+
+    // 3. Intra-Process Fallback
+    DWORD timeout = (timeout_ms == 0xFFFFFFFF) ? INFINITE : timeout_ms;
+    BOOL res = WaitOnAddress((volatile void*)addr, &expected_val, sizeof(uint32_t), timeout);
+    if (!res) {
+        if (GetLastError() == ERROR_TIMEOUT) return 1;
+        return -1;
+    }
+    return 0;
+#elif defined(__linux__)
+    struct timespec ts;
+    struct timespec *pts = nullptr;
+    if (timeout_ms != 0xFFFFFFFF) {
+        ts.tv_sec = timeout_ms / 1000;
+        ts.tv_nsec = (timeout_ms % 1000) * 1000000;
+        pts = &ts;
+    }
+    long res = syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAIT, expected_val, pts, nullptr, 0);
+    if (res == -1) return -1;
+    return 0;
+#elif defined(__APPLE__)
+    uint32_t timeout_us = (timeout_ms == 0xFFFFFFFF) ? 0 : (timeout_ms * 1000);
+    int res = __ulock_wait(UL_COMPARE_AND_WAIT, (void*)addr, expected_val, timeout_us);
+    if (res < 0) return -1;
+    return 0;
+#else
+    return -1;
+#endif
+}
+
+extern "C" int32_t polydim_futex_wake_v805(volatile uint32_t* addr, bool wake_all) {
+    if (!addr) return -1;
+
+#if defined(_WIN32)
+    // 1. Despertar cross-process mediante Named Event
+    char event_name[128];
+    uintptr_t addr_val = reinterpret_cast<uintptr_t>(addr);
+    snprintf(event_name, sizeof(event_name), "Local\\PolydimFutex_%llx", (unsigned long long)addr_val);
+    HANDLE hEvent = OpenEventA(EVENT_MODIFY_STATE, FALSE, event_name);
+    if (hEvent != NULL) {
+        SetEvent(hEvent);
+        CloseHandle(hEvent);
+    }
+
+    // 2. Despertar intra-proceso
+    if (wake_all) {
+        WakeByAddressAll((PVOID)addr);
+    } else {
+        WakeByAddressSingle((PVOID)addr);
+    }
+    return 0;
+#elif defined(__linux__)
+    syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAKE, wake_all ? INT_MAX : 1, nullptr, nullptr, 0);
+    return 0;
+#elif defined(__APPLE__)
+    uint32_t op = UL_COMPARE_AND_WAIT;
+    if (wake_all) {
+        op |= ULF_WAKE_ALL;
+    }
+    __ulock_wake(op, (void*)addr, 0);
+    return 0;
+#else
+    return -1;
+#endif
+}

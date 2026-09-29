@@ -138,6 +138,7 @@ extern "C" void* polydim_alloc_aligned(size_t bytes, size_t alignment) {
     size_t align = (alignment > 0) ? alignment : 64;
     // Alineación en potencia de 2
     if ((align & (align - 1)) != 0) align = 64;
+    if (align < sizeof(void*)) align = sizeof(void*);
 
 #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
     return _aligned_malloc(bytes, align);
@@ -269,7 +270,7 @@ extern "C" void polydim_spsc_destroy(PolydimSpscRing* ring) {
 /* 5. GRAMIANA SIMÉTRICA: X^T * X (DSYRK / L1-L2 TILED PACKING)             */
 /* ========================================================================= */
 
-int32_t polydim_gram_dsyrk(
+extern "C" int32_t polydim_gram_dsyrk(
     const double* X,
     size_t D,
     size_t K,
@@ -790,7 +791,7 @@ static int pmtp_is_process_alive(uint32_t pid) {
     CloseHandle(h);
     return 0;
 #else
-    return (kill((pid_t)pid, 0) == 0) ? 1 : 0;
+    return (kill((pid_t)pid, 0) == 0 || errno == EPERM) ? 1 : 0;
 #endif
 }
 
@@ -840,14 +841,15 @@ extern "C" int32_t pmtp_banked_slot_acquire_reader(
         uint32_t cur_state = state_atom->load(std::memory_order_relaxed);
 
         if (cur_state == PMTP_LEASE_FREE || cur_state == PMTP_LEASE_CLOSED || cur_state == PMTP_LEASE_RECLAIMED) {
-            leases[i].pid = pid;
-            leases[i].process_start_time_ns = start_time_ns;
-            leases[i].generation = header->sequence;
-            
-            state_atom->store(PMTP_LEASE_ACTIVE, std::memory_order_release);
-            *acquired_bank = bank;
-            *acquired_slot_idx = static_cast<uint32_t>(i);
-            return POLYDIM_STATUS_OK;
+            if (state_atom->compare_exchange_strong(cur_state, PMTP_LEASE_ACTIVE, std::memory_order_acquire)) {
+                leases[i].pid = pid;
+                leases[i].process_start_time_ns = start_time_ns;
+                leases[i].generation = header->sequence;
+                std::atomic_signal_fence(std::memory_order_acq_rel);
+                *acquired_bank = bank;
+                *acquired_slot_idx = static_cast<uint32_t>(i);
+                return POLYDIM_STATUS_OK;
+            }
         }
     }
 
@@ -876,8 +878,9 @@ extern "C" int32_t pmtp_banked_slot_acquire_writer(PmtpBankedSlotHeader* header,
     PmtpReaderLease* target_leases = (target == 0) ? header->leases_bank0 : header->leases_bank1;
 
     int retries = 5000;
+    bool has_active_readers = true;
     while (retries-- > 0) {
-        bool has_active_readers = false;
+        has_active_readers = false;
         for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
             std::atomic<uint32_t>* state_atom = reinterpret_cast<std::atomic<uint32_t>*>(&target_leases[i].state);
             if (state_atom->load(std::memory_order_acquire) == PMTP_LEASE_ACTIVE) {
@@ -889,6 +892,11 @@ extern "C" int32_t pmtp_banked_slot_acquire_writer(PmtpBankedSlotHeader* header,
 
         uint32_t reclaimed = 0;
         pmtp_reap_orphaned_leases(header, target, 1000000, &reclaimed);
+    }
+
+    if (has_active_readers) {
+        ((std::atomic<uint32_t>*)&header->writer_active)->store(0, std::memory_order_release);
+        return -10; // Writer contention timeout: active readers remain
     }
 
     header->owner_pid = pid;
@@ -949,7 +957,7 @@ extern "C" int32_t polydim_structured_lsm_step(
 
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < D; ++i) {
-        double s_val = state[p1[i]] * (d1[p1[i]] < 0 ? -1.0 : 1.0);
+        double s_val = state[p1[i]] * (d1[i] < 0 ? -1.0 : 1.0);
         tmp[i] = s_val;
     }
 

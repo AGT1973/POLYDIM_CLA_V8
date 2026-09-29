@@ -976,8 +976,9 @@ extern "C" int32_t pmtp_banked_slot_acquire_writer(PmtpBankedSlotHeader* header,
     PmtpReaderLease* target_leases = (target == 0) ? header->leases_bank0 : header->leases_bank1;
 
     int retries = 5000;
+    bool has_active_readers = true;
     while (retries-- > 0) {
-        bool has_active_readers = false;
+        has_active_readers = false;
         for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
             std::atomic<uint32_t>* state_atom = reinterpret_cast<std::atomic<uint32_t>*>(&target_leases[i].state);
             if (state_atom->load(std::memory_order_acquire) == PMTP_LEASE_ACTIVE) {
@@ -989,6 +990,11 @@ extern "C" int32_t pmtp_banked_slot_acquire_writer(PmtpBankedSlotHeader* header,
 
         uint32_t reclaimed = 0;
         pmtp_reap_orphaned_leases(header, target, 1000000, &reclaimed);
+    }
+
+    if (has_active_readers) {
+        writer_active->store(0, std::memory_order_release);
+        return -12; // Writer timeout: active readers remain
     }
 
     header->owner_pid = pid;

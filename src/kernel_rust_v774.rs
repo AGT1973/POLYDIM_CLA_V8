@@ -187,12 +187,20 @@ pub extern "C" fn polydim_rust_frechet_betti_filter(
         let d = dimension as usize;
         let thresh = if dist_threshold > 0.0 { dist_threshold } else { 1.0 };
 
-        let candidates = unsafe { std::slice::from_raw_parts(candidates_ptr, n * d) };
+        let total_len = match n.checked_mul(d) {
+            Some(v) => v,
+            None => return -2,
+        };
+        let candidates = unsafe { std::slice::from_raw_parts(candidates_ptr, total_len) };
 
         // 1. Calcular matriz de distancias euclidianas y construir grafo de umbral
         let mut dsu = DisjointSet::new(n);
         let mut edge_count = 0usize;
-        let mut dist_matrix = vec![0.0f64; n * n];
+        let mat_size = match n.checked_mul(n) {
+            Some(v) => v,
+            None => return -2,
+        };
+        let mut dist_matrix = vec![0.0f64; mat_size];
 
         for i in 0..n {
             for j in (i + 1)..n {
@@ -308,7 +316,8 @@ pub extern "C" fn polydim_rust_frechet_betti_filter(
         }
 
         // Certificación de consenso BFT: Quórum >= 2/3 y ciclos homológicos acotados
-        let is_certified = (active_count >= ((2 * n + 2) / 3) as u32) && (betti1 <= max_tau_betti1);
+        let quorum = ((n as u64).saturating_mul(2).saturating_add(2) / 3) as u32;
+        let is_certified = (active_count >= quorum) && (betti1 <= max_tau_betti1);
 
         unsafe {
             *out_result = PolydimFrechetBettiResult {

@@ -10,8 +10,8 @@
 - **Kaggle Linux GPU Cluster:** Compilación nativa completada con éxito (`tradingnewtech/polydim-fase11-rdma-v2`). Binarios `rdma_pmtp_core.so` y `librdma_pmtp_core.so` enlazados con `libibverbs` (RoCEv2/InfiniBand).
 - **APIs & Credenciales (Bóveda Segura en `PERMANENT_MEMORY.md`):**
   - **Claude 3.7 Fable / Sonnet:** Tier Pago activo (`sk-ant-api03...`).
-  - **Cerebras (Llama 3.1 70B):** API Key resguardada (`csk-kvrkckd...`).
-  - **Gemini 3.6 Flash:** Verificado y activo en Rust MCP (`AQ.Ab8RN6I...`).
+  - **Cerebras (Llama 3.1 70B):** API Key resguardada (`[REDACTED_CEREBRAS_KEY]...`).
+  - **Gemini 3.6 Flash:** Verificado y activo en Rust MCP (`[REDACTED_GEMINI_KEY]...`).
   - **DeepSeek R1 / OpenRouter:** Pago y activo (`sk-or-v1...`).
 
 ---

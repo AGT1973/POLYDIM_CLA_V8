@@ -1,0 +1,15 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V805 - PHASE 2 (CRYPTOGRAPHY)
+CONTEXT: We need to implement ChaCha20-Poly1305 (or AES-256-GCM) and HMAC-SHA256 for the IPC PMTP payload.
+TARGET: E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\src\ipc\polydim_crypto_v805.cpp
+
+CRITICAL ERRORS TO FIX (Category G):
+G-1: No HMAC-SHA256 namespace isolation.
+G-2: No AEAD encryption (ChaCha20-Poly1305 / AES-GCM) for payloads.
+G-4: No ACL/SID in Win32 for handles.
+G-5: bInheritHandle = FALSE not explicit.
+
+INSTRUCTIONS:
+1. Create src/ipc/polydim_crypto_v805.cpp and .h.
+2. Implement polydim_hmac_sha256(key, data, out).
+3. Implement polydim_aead_encrypt(key, nonce, data, ad, out, mac) using a simple ChaCha20-Poly1305 implementation or bind to OpenSSL/Bcrypt. Since we want no massive dependencies, use Windows BCrypt (Bcrypt.dll) on Win32, or a fallback.
+4. Return ONLY "SLAB_ID: SLAB_CRYPTO_DONE, TENSOR_READY".

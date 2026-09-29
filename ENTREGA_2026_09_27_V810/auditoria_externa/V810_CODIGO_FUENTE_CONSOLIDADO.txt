@@ -1,0 +1,2544 @@
+================================================================================
+POLYDIM V810 — CÓDIGO FUENTE CONSOLIDADO Y AUDITADO LÍNEA POR LÍNEA
+================================================================================
+
+/* ############################################################################ */
+/* FILE: polydim_solver_abi_v808_1.h */
+/* ############################################################################ */
+
+00001 | polydim_solver_abi_v808_1.h:1    | /* ========================================================= */
+00002 | polydim_solver_abi_v808_1.h:2    | /* FILE: ABI HEADER: polydim_solver_abi_v808_1.h  (PATCH C2/C5) */
+00003 | polydim_solver_abi_v808_1.h:3    | /* Cambios vs V808:                                            */
+00004 | polydim_solver_abi_v808_1.h:4    | /*  + ABI_VERSION y polydim_abi_probe() para detectar desync. */
+00005 | polydim_solver_abi_v808_1.h:5    | /*  + PmtpBankedSlotHeader: prev_bank + writer_heartbeat_ns    */
+00006 | polydim_solver_abi_v808_1.h:6    | /*    (offsets recalculados, leases siguen en offset 128).     */
+00007 | polydim_solver_abi_v808_1.h:7    | /* ========================================================= */
+00008 | polydim_solver_abi_v808_1.h:8    | #ifndef POLYDIM_SOLVER_ABI_H
+00009 | polydim_solver_abi_v808_1.h:9    | #define POLYDIM_SOLVER_ABI_H
+00010 | polydim_solver_abi_v808_1.h:10   | 
+00011 | polydim_solver_abi_v808_1.h:11   | #include <stdint.h>
+00012 | polydim_solver_abi_v808_1.h:12   | #include <stddef.h>
+00013 | polydim_solver_abi_v808_1.h:13   | 
+00014 | polydim_solver_abi_v808_1.h:14   | #ifdef __cplusplus
+00015 | polydim_solver_abi_v808_1.h:15   | extern "C" {
+00016 | polydim_solver_abi_v808_1.h:16   | #endif
+00017 | polydim_solver_abi_v808_1.h:17   | 
+00018 | polydim_solver_abi_v808_1.h:18   | #define PMTP_ABI_VERSION_V808_1   0x80801u
+00019 | polydim_solver_abi_v808_1.h:19   | #define PMTP_MAX_READERS_PER_BANK 32
+00020 | polydim_solver_abi_v808_1.h:20   | #define PMTP_NUM_RCU_SLOTS 3
+00021 | polydim_solver_abi_v808_1.h:21   | 
+00022 | polydim_solver_abi_v808_1.h:22   | /* Estados de los Leases de Lectura */
+00023 | polydim_solver_abi_v808_1.h:23   | #define PMTP_LEASE_FREE      0
+00024 | polydim_solver_abi_v808_1.h:24   | #define PMTP_LEASE_ACTIVE    1
+00025 | polydim_solver_abi_v808_1.h:25   | #define PMTP_LEASE_CLOSED    2
+00026 | polydim_solver_abi_v808_1.h:26   | #define PMTP_LEASE_RECLAIMED 3
+00027 | polydim_solver_abi_v808_1.h:27   | 
+00028 | polydim_solver_abi_v808_1.h:28   | /* Códigos de Error Normalizados V808 */
+00029 | polydim_solver_abi_v808_1.h:29   | #define POLYDIM_STATUS_OK                        0
+00030 | polydim_solver_abi_v808_1.h:30   | #define POLYDIM_STATUS_CONVERGED_GRADIENT        1
+00031 | polydim_solver_abi_v808_1.h:31   | #define POLYDIM_STATUS_CONVERGED_STEP            2
+00032 | polydim_solver_abi_v808_1.h:32   | #define POLYDIM_STATUS_MAX_ITERATIONS            3
+00033 | polydim_solver_abi_v808_1.h:33   | #define POLYDIM_STATUS_ERR_NULL_PTR             -1
+00034 | polydim_solver_abi_v808_1.h:34   | #define POLYDIM_STATUS_ERR_INVALID_DIM          -2
+00035 | polydim_solver_abi_v808_1.h:35   | #define POLYDIM_STATUS_ERR_ALLOC                -3
+00036 | polydim_solver_abi_v808_1.h:36   | #define POLYDIM_STATUS_ERR_NUMERICAL_NAN        -4
+00037 | polydim_solver_abi_v808_1.h:37   | #define POLYDIM_STATUS_ERR_ORTHO_VIOLATION      -5
+00038 | polydim_solver_abi_v808_1.h:38   | #define POLYDIM_STATUS_ERR_RING_FULL            -6
+00039 | polydim_solver_abi_v808_1.h:39   | #define POLYDIM_STATUS_ERR_RING_EMPTY           -7
+00040 | polydim_solver_abi_v808_1.h:40   | #define POLYDIM_STATUS_ERR_ABI_MISMATCH         -8
+00041 | polydim_solver_abi_v808_1.h:41   | #define POLYDIM_STATUS_ERR_RANK_DEFICIENT       -9
+00042 | polydim_solver_abi_v808_1.h:42   | #define POLYDIM_STATUS_ERR_WRITER_BUSY          -10
+00043 | polydim_solver_abi_v808_1.h:43   | #define POLYDIM_STATUS_ERR_NO_FREE_SLOT         -11
+00044 | polydim_solver_abi_v808_1.h:44   | #define POLYDIM_STATUS_ERR_DRAIN_TIMEOUT        -12
+00045 | polydim_solver_abi_v808_1.h:45   | 
+00046 | polydim_solver_abi_v808_1.h:46   | /* Tipos de Retracción Stiefel */
+00047 | polydim_solver_abi_v808_1.h:47   | #define POLYDIM_RETRACTION_CHOLQR2              0
+00048 | polydim_solver_abi_v808_1.h:48   | #define POLYDIM_RETRACTION_CAYLEY_SMW           1
+00049 | polydim_solver_abi_v808_1.h:49   | 
+00050 | polydim_solver_abi_v808_1.h:50   | #pragma pack(push, 8)
+00051 | polydim_solver_abi_v808_1.h:51   | 
+00052 | polydim_solver_abi_v808_1.h:52   | /* Descriptor de Lease con contador de generación monotónica (Anti-ABA) */
+00053 | polydim_solver_abi_v808_1.h:53   | typedef struct {
+00054 | polydim_solver_abi_v808_1.h:54   |     uint32_t state;                  /* 0: Free, 1: Active, 2: Closed, 3: Reclaimed */
+00055 | polydim_solver_abi_v808_1.h:55   |     uint32_t pid;                    /* PID del proceso lector */
+00056 | polydim_solver_abi_v808_1.h:56   |     uint64_t process_start_time_ns;  /* Identificador temporal contra PID recycling */
+00057 | polydim_solver_abi_v808_1.h:57   |     uint64_t generation;             /* sequence del publicador en el momento de adquirir */
+00058 | polydim_solver_abi_v808_1.h:58   |     uint32_t epoch;                  /* global_epoch en el momento de adquirir */
+00059 | polydim_solver_abi_v808_1.h:59   |     uint32_t pad;                    /* Alineación a 32 bytes */
+00060 | polydim_solver_abi_v808_1.h:60   | } PmtpReaderLease;
+00061 | polydim_solver_abi_v808_1.h:61   | 
+00062 | polydim_solver_abi_v808_1.h:62   | /* Cabecera Banked RCU de 3 Épocas (Alineación Estricta a 128 Bytes)
+00063 | polydim_solver_abi_v808_1.h:63   |  * V808.1: prev_bank y writer_heartbeat_ns para protocolo correcto.
+00064 | polydim_solver_abi_v808_1.h:64   |  * Invariante del protocolo V808.1:
+00065 | polydim_solver_abi_v808_1.h:65   |  *   - Los lectores leen ÚNICAMENTE active_bank (published).
+00066 | polydim_solver_abi_v808_1.h:66   |  *   - El escritor escribe el banco que NO es active_bank NI prev_bank,
+00067 | polydim_solver_abi_v808_1.h:67   |  *     drena ese banco con timeout real y publica en commit.
+00068 | polydim_solver_abi_v808_1.h:68   |  *   - global_epoch avanza SOLO en commit_writer. */
+00069 | polydim_solver_abi_v808_1.h:69   | typedef struct {
+00070 | polydim_solver_abi_v808_1.h:70   |     uint32_t global_epoch;           /* 0  - época global monotónica (avanza en commit) */
+00071 | polydim_solver_abi_v808_1.h:71   |     uint32_t active_bank;            /* 4  - banco publicado; los lectores leen ESTE */
+00072 | polydim_solver_abi_v808_1.h:72   |     uint32_t writer_active;          /* 8  - mutex atómico del escritor único */
+00073 | polydim_solver_abi_v808_1.h:73   |     uint32_t owner_pid;              /* 12 - PID del proceso escritor actual */
+00074 | polydim_solver_abi_v808_1.h:74   |     uint64_t sequence;               /* 16 - nº de secuencia de publicación */
+00075 | polydim_solver_abi_v808_1.h:75   |     uint64_t owner_start_time_ns;    /* 24 - timestamp de inicio del escritor */
+00076 | polydim_solver_abi_v808_1.h:76   |     uint32_t num_reclaimed_orphans;  /* 32 - contador de procesos zombi purgados */
+00077 | polydim_solver_abi_v808_1.h:77   |     uint32_t prev_bank;              /* 36 - banco publicado en el commit anterior */
+00078 | polydim_solver_abi_v808_1.h:78   |     uint64_t writer_heartbeat_ns;    /* 40 - último latido del escritor (anti-steal erróneo) */
+00079 | polydim_solver_abi_v808_1.h:79   |     uint8_t  header_padding[80];     /* 48..128 - leases_bank0 empieza exactamente en 128 */
+00080 | polydim_solver_abi_v808_1.h:80   |     PmtpReaderLease leases_bank0[PMTP_MAX_READERS_PER_BANK];
+00081 | polydim_solver_abi_v808_1.h:81   |     PmtpReaderLease leases_bank1[PMTP_MAX_READERS_PER_BANK];
+00082 | polydim_solver_abi_v808_1.h:82   |     PmtpReaderLease leases_bank2[PMTP_MAX_READERS_PER_BANK];
+00083 | polydim_solver_abi_v808_1.h:83   | } PmtpBankedSlotHeader;
+00084 | polydim_solver_abi_v808_1.h:84   | 
+00085 | polydim_solver_abi_v808_1.h:85   | /* Estructura de Opciones del Optimizador (64 bytes, SIN objective_tolerance) */
+00086 | polydim_solver_abi_v808_1.h:86   | typedef struct {
+00087 | polydim_solver_abi_v808_1.h:87   |     uint64_t max_iterations;
+00088 | polydim_solver_abi_v808_1.h:88   |     double   gradient_tolerance;
+00089 | polydim_solver_abi_v808_1.h:89   |     double   step_tolerance;
+00090 | polydim_solver_abi_v808_1.h:90   |     double   ortho_tolerance;
+00091 | polydim_solver_abi_v808_1.h:91   |     double   learning_rate;
+00092 | polydim_solver_abi_v808_1.h:92   |     uint32_t sampling_period;
+00093 | polydim_solver_abi_v808_1.h:93   |     uint32_t num_threads;
+00094 | polydim_solver_abi_v808_1.h:94   |     int32_t  retraction_type;
+00095 | polydim_solver_abi_v808_1.h:95   |     double   shift_regularization;
+00096 | polydim_solver_abi_v808_1.h:96   | } PolydimSolverOptions;
+00097 | polydim_solver_abi_v808_1.h:97   | 
+00098 | polydim_solver_abi_v808_1.h:98   | /* Resultados de la Optimización */
+00099 | polydim_solver_abi_v808_1.h:99   | typedef struct {
+00100 | polydim_solver_abi_v808_1.h:100  |     int32_t  status;
+00101 | polydim_solver_abi_v808_1.h:101  |     uint64_t iterations_executed;
+00102 | polydim_solver_abi_v808_1.h:102  |     double   final_objective;
+00103 | polydim_solver_abi_v808_1.h:103  |     double   final_grad_norm;
+00104 | polydim_solver_abi_v808_1.h:104  |     double   final_ortho_error;
+00105 | polydim_solver_abi_v808_1.h:105  |     uint64_t total_time_ns;
+00106 | polydim_solver_abi_v808_1.h:106  |     char     status_message[256];
+00107 | polydim_solver_abi_v808_1.h:107  | } PolydimSolverResult;
+00108 | polydim_solver_abi_v808_1.h:108  | 
+00109 | polydim_solver_abi_v808_1.h:109  | /* Punto de Telemetría */
+00110 | polydim_solver_abi_v808_1.h:110  | typedef struct {
+00111 | polydim_solver_abi_v808_1.h:111  |     uint64_t iteration;
+00112 | polydim_solver_abi_v808_1.h:112  |     double   objective_value;
+00113 | polydim_solver_abi_v808_1.h:113  |     double   gradient_norm;
+00114 | polydim_solver_abi_v808_1.h:114  |     double   step_size;
+00115 | polydim_solver_abi_v808_1.h:115  |     double   ortho_error;
+00116 | polydim_solver_abi_v808_1.h:116  |     uint64_t elapsed_time_ns;
+00117 | polydim_solver_abi_v808_1.h:117  | } PolydimTelemetryPoint;
+00118 | polydim_solver_abi_v808_1.h:118  | 
+00119 | polydim_solver_abi_v808_1.h:119  | /* Búfer de Telemetría */
+00120 | polydim_solver_abi_v808_1.h:120  | typedef struct {
+00121 | polydim_solver_abi_v808_1.h:121  |     PolydimTelemetryPoint* points;
+00122 | polydim_solver_abi_v808_1.h:122  |     size_t capacity;
+00123 | polydim_solver_abi_v808_1.h:123  |     size_t recorded_count;
+00124 | polydim_solver_abi_v808_1.h:124  | } PolydimTelemetryBuffer;
+00125 | polydim_solver_abi_v808_1.h:125  | 
+00126 | polydim_solver_abi_v808_1.h:126  | /* Evento de Telemetría para el Anillo SPSC (128 bytes, espejo exacto C++/Python) */
+00127 | polydim_solver_abi_v808_1.h:127  | typedef struct {
+00128 | polydim_solver_abi_v808_1.h:128  |     uint64_t timestamp_ns;
+00129 | polydim_solver_abi_v808_1.h:129  |     uint32_t event_type;
+00130 | polydim_solver_abi_v808_1.h:130  |     uint32_t thread_id;
+00131 | polydim_solver_abi_v808_1.h:131  |     double   metrics[14];            /* metrics[0]=iteration, [1]=objective, ... */
+00132 | polydim_solver_abi_v808_1.h:132  | } PolydimTelemetryEvent;
+00133 | polydim_solver_abi_v808_1.h:133  | 
+00134 | polydim_solver_abi_v808_1.h:134  | /* Anillo SPSC Wait-Free con Aislamiento de Línea de Caché */
+00135 | polydim_solver_abi_v808_1.h:135  | typedef struct {
+00136 | polydim_solver_abi_v808_1.h:136  |     uint64_t write_index;
+00137 | polydim_solver_abi_v808_1.h:137  |     uint8_t  pad_write[120];
+00138 | polydim_solver_abi_v808_1.h:138  |     uint64_t read_index;
+00139 | polydim_solver_abi_v808_1.h:139  |     uint8_t  pad_read[120];
+00140 | polydim_solver_abi_v808_1.h:140  |     size_t   capacity;
+00141 | polydim_solver_abi_v808_1.h:141  |     size_t   capacity_mask;
+00142 | polydim_solver_abi_v808_1.h:142  |     PolydimTelemetryEvent* ring_buffer;
+00143 | polydim_solver_abi_v808_1.h:143  | } PolydimSpscRing;
+00144 | polydim_solver_abi_v808_1.h:144  | 
+00145 | polydim_solver_abi_v808_1.h:145  | /* Handle con Conteo de Referencia */
+00146 | polydim_solver_abi_v808_1.h:146  | typedef struct {
+00147 | polydim_solver_abi_v808_1.h:147  |     void*    data;
+00148 | polydim_solver_abi_v808_1.h:148  |     size_t   bytes;
+00149 | polydim_solver_abi_v808_1.h:149  |     int32_t  refcount;
+00150 | polydim_solver_abi_v808_1.h:150  |     uint32_t flags;
+00151 | polydim_solver_abi_v808_1.h:151  |     uint64_t allocation_id;
+00152 | polydim_solver_abi_v808_1.h:152  | } PolydimHandle;
+00153 | polydim_solver_abi_v808_1.h:153  | 
+00154 | polydim_solver_abi_v808_1.h:154  | #pragma pack(pop)
+00155 | polydim_solver_abi_v808_1.h:155  | 
+00156 | polydim_solver_abi_v808_1.h:156  | #ifdef __cplusplus
+00157 | polydim_solver_abi_v808_1.h:157  | static_assert(sizeof(PmtpReaderLease) == 32, "PmtpReaderLease must be exactly 32 bytes");
+00158 | polydim_solver_abi_v808_1.h:158  | static_assert(offsetof(PmtpBankedSlotHeader, leases_bank0) == 128, "leases_bank0 must start at byte 128");
+00159 | polydim_solver_abi_v808_1.h:159  | static_assert(sizeof(PolydimSolverOptions) == 64, "PolydimSolverOptions ABI drift");
+00160 | polydim_solver_abi_v808_1.h:160  | static_assert(sizeof(PolydimTelemetryEvent) == 128, "PolydimTelemetryEvent ABI drift");
+00161 | polydim_solver_abi_v808_1.h:161  | #endif
+00162 | polydim_solver_abi_v808_1.h:162  | 
+00163 | polydim_solver_abi_v808_1.h:163  | #ifdef __cplusplus
+00164 | polydim_solver_abi_v808_1.h:164  | }
+00165 | polydim_solver_abi_v808_1.h:165  | #endif
+00166 | polydim_solver_abi_v808_1.h:166  | 
+00167 | polydim_solver_abi_v808_1.h:167  | #endif /* POLYDIM_SOLVER_ABI_H */
+
+
+/* ############################################################################ */
+/* FILE: polydim_ipc_v808_1.h */
+/* ############################################################################ */
+
+00168 | polydim_ipc_v808_1.h:1    | /* polydim_ipc_v808_1.h — contrato de memoria compartida del futex V808.1:
+00169 | polydim_ipc_v808_1.h:2    |  *
+00170 | polydim_ipc_v808_1.h:3    |  *   offset -24: PmtpFutexSharedHeader (16B guid + 8B magic)   [Windows]
+00171 | polydim_ipc_v808_1.h:4    |  *   offset   0: uint32_t palabra futex (compartida)
+00172 | polydim_ipc_v808_1.h:5    |  *
+00173 | polydim_ipc_v808_1.h:6    |  * El proceso duenio del mapping llama pmtp_futex_shared_init(&word) una vez
+00174 | polydim_ipc_v808_1.h:7    |  * antes de que otros procesos esperen/despierten sobre &word.
+00175 | polydim_ipc_v808_1.h:8    |  * Linux/macOS: la funcion es no-op (futex/ulock ya son globales al mapping).
+00176 | polydim_ipc_v808_1.h:9    |  */
+
+
+/* ############################################################################ */
+/* FILE: kernel_cpp_v810.cpp */
+/* ############################################################################ */
+
+00177 | kernel_cpp_v810.cpp:1    | /**
+00178 | kernel_cpp_v810.cpp:2    |  * @file kernel_cpp_v808_1.cpp
+00179 | kernel_cpp_v810.cpp:3    |  * Kernel Monolitico C++ POLYDIM V808.1 (Bulldog Red Team, 3ra pasada completa)
+00180 | kernel_cpp_v810.cpp:4    |  * Correcciones integradas:
+00181 | kernel_cpp_v810.cpp:5    |  *  G1  Firewall isfinite en el loop del solver -> POLYDIM_STATUS_ERR_NUMERICAL_NAN
+00182 | kernel_cpp_v810.cpp:6    |  *  G2  CONVERGED_GRADIENT exige pertenencia a Stiefel; X nulo -> ERR_RANK_DEFICIENT
+00183 | kernel_cpp_v810.cpp:7    |  *  G3  tiled_dsyrk respeta beta y elimina atomics innecesarios (cada (i,j) pertenece
+00184 | kernel_cpp_v810.cpp:8    |  *      a un unico tile; se acumula en registro y se escribe una sola vez)
+00185 | kernel_cpp_v810.cpp:9    |  *  G7  Shifted CholQR2: el shift Tikhonov se aplica a TODA la diagonal de G antes
+00186 | kernel_cpp_v810.cpp:10   |  *      de factorizar (antes: patch por pivote que corrompia los off-diagonales)
+00187 | kernel_cpp_v810.cpp:11   |  *  G8  solve_linear_system_general: umbral de pivote RELATIVO a max|A|
+00188 | kernel_cpp_v810.cpp:12   |  *      (antes: 1e-15 absoluto -> falsos singulares/falsos positivos segun escala)
+00189 | kernel_cpp_v810.cpp:13   |  *  G6' project_to_tangent_space y VtZ del Cayley: reduccion por scratch por hilo,
+00190 | kernel_cpp_v810.cpp:14   |  *      sin O(D*K^2) atomicas (explica los 16819 ms del log)
+00191 | kernel_cpp_v810.cpp:15   |  *  G11 polydim_alloc_aligned: alineacion minima sizeof(void*) (posix_memalign/
+00192 | kernel_cpp_v810.cpp:16   |  *      _aligned_malloc la exigen multiplo de sizeof(void*))
+00193 | kernel_cpp_v810.cpp:17   |  *  G12 spsc_init: overflow capacity*sizeof(Event) validado
+00194 | kernel_cpp_v810.cpp:18   |  *  G9  lsm_step: validacion de permutaciones p1/p2 < D + firewall isfinite
+00195 | kernel_cpp_v810.cpp:19   |  *  G3' matmul_kxk eliminada (codigo muerto)
+00196 | kernel_cpp_v810.cpp:20   |  *  CONVERGED_STEP implementado (step_tolerance antes era campo muerto)
+00197 | kernel_cpp_v810.cpp:21   |  */
+00198 | kernel_cpp_v810.cpp:22   | 
+00199 | kernel_cpp_v810.cpp:23   | #include <cmath>
+00200 | kernel_cpp_v810.cpp:24   | #include <cstdio>
+00201 | kernel_cpp_v810.cpp:25   | #include <cstdlib>
+00202 | kernel_cpp_v810.cpp:26   | #include <cstring>
+00203 | kernel_cpp_v810.cpp:27   | #include <cstdint>
+00204 | kernel_cpp_v810.cpp:28   | #include <chrono>
+00205 | kernel_cpp_v810.cpp:29   | #include <atomic>
+00206 | kernel_cpp_v810.cpp:30   | #include <immintrin.h>
+00207 | kernel_cpp_v810.cpp:31   | #include <algorithm>
+00208 | kernel_cpp_v810.cpp:32   | #include <vector>
+00209 | kernel_cpp_v810.cpp:33   | 
+00210 | kernel_cpp_v810.cpp:34   | #if defined(_OPENMP)
+00211 | kernel_cpp_v810.cpp:35   | #include <omp.h>
+00212 | kernel_cpp_v810.cpp:36   | #else
+00213 | kernel_cpp_v810.cpp:37   | static inline int  omp_get_num_threads(void) { return 1; }
+00214 | kernel_cpp_v810.cpp:38   | static inline int  omp_get_thread_num(void)  { return 0; }
+00215 | kernel_cpp_v810.cpp:39   | static inline int  omp_get_max_threads(void) { return 1; }
+00216 | kernel_cpp_v810.cpp:40   | static inline void omp_set_num_threads(int)  {}
+00217 | kernel_cpp_v810.cpp:41   | #endif
+00218 | kernel_cpp_v810.cpp:42   | 
+00219 | kernel_cpp_v810.cpp:43   | #if defined(_WIN32)
+00220 | kernel_cpp_v810.cpp:44   |   #include <windows.h>
+00221 | kernel_cpp_v810.cpp:45   |   #define POLYDIM_EXPORT extern "C" __declspec(dllexport)
+00222 | kernel_cpp_v810.cpp:46   | #else
+00223 | kernel_cpp_v810.cpp:47   |   #define POLYDIM_EXPORT extern "C" __attribute__((visibility("default")))
+00224 | kernel_cpp_v810.cpp:48   | #endif
+00225 | kernel_cpp_v810.cpp:49   | 
+00226 | kernel_cpp_v810.cpp:50   | #include "polydim_solver_abi_v808_1.h"
+00227 | kernel_cpp_v810.cpp:51   | // #include "polydim_blas_loader.h"
+00228 | kernel_cpp_v810.cpp:52   | 
+00229 | kernel_cpp_v810.cpp:53   | 
+00230 | kernel_cpp_v810.cpp:54   | enum CBLAS_ORDER { CblasRowMajor=101, CblasColMajor=102 };
+00231 | kernel_cpp_v810.cpp:55   | enum CBLAS_TRANSPOSE { CblasNoTrans=111, CblasTrans=112, CblasConjTrans=113 };
+00232 | kernel_cpp_v810.cpp:56   | enum CBLAS_UPLO { CblasUpper=121, CblasLower=122 };
+00233 | kernel_cpp_v810.cpp:57   | 
+00234 | kernel_cpp_v810.cpp:58   | static void tiled_dsyrk_fixed(int trans, size_t n, size_t k,
+00235 | kernel_cpp_v810.cpp:59   |                               double alpha, const double* __restrict__ a, size_t lda,
+00236 | kernel_cpp_v810.cpp:60   |                               double beta, double* __restrict__ c, size_t ldc);
+00237 | kernel_cpp_v810.cpp:61   | 
+00238 | kernel_cpp_v810.cpp:62   | #define TILE_D 32
+00239 | kernel_cpp_v810.cpp:63   | #define TILE_K 32
+00240 | kernel_cpp_v810.cpp:64   | 
+00241 | kernel_cpp_v810.cpp:65   | /* Barrera dura de deriva de ABI: Python debe comparar esto en el arranque. */
+00242 | kernel_cpp_v810.cpp:66   | POLYDIM_EXPORT size_t polydim_abi_probe(void) {
+00243 | kernel_cpp_v810.cpp:67   |     return sizeof(PolydimSolverOptions);
+00244 | kernel_cpp_v810.cpp:68   | }
+00245 | kernel_cpp_v810.cpp:69   | 
+00246 | kernel_cpp_v810.cpp:70   | /* ========================================================================= */
+00247 | kernel_cpp_v810.cpp:71   | /* 1. MODO FLOTANTE DUAL IEEE-754                                            */
+00248 | kernel_cpp_v810.cpp:72   | /* ========================================================================= */
+00249 | kernel_cpp_v810.cpp:73   | 
+00250 | kernel_cpp_v810.cpp:74   | typedef enum { POLYDIM_FP_DETERMINISTIC = 0, POLYDIM_FP_THROUGHPUT = 1 } PolydimFpMode;
+00251 | kernel_cpp_v810.cpp:75   | 
+00252 | kernel_cpp_v810.cpp:76   | static std::atomic<int32_t> g_fp_mode{POLYDIM_FP_THROUGHPUT};
+00253 | kernel_cpp_v810.cpp:77   | 
+00254 | kernel_cpp_v810.cpp:78   | POLYDIM_EXPORT void polydim_set_fp_mode(int32_t mode) { g_fp_mode.store(mode, std::memory_order_relaxed); }
+00255 | kernel_cpp_v810.cpp:79   | POLYDIM_EXPORT int32_t polydim_get_fp_mode(void)      { return g_fp_mode.load(std::memory_order_relaxed); }
+00256 | kernel_cpp_v810.cpp:80   | 
+00257 | kernel_cpp_v810.cpp:81   | static inline void knuth_two_sum(double a, double b, double* s, double* t) {
+00258 | kernel_cpp_v810.cpp:82   |     volatile double sum = a + b;
+00259 | kernel_cpp_v810.cpp:83   |     double b_virtual = sum - a;
+00260 | kernel_cpp_v810.cpp:84   |     double a_virtual = sum - b_virtual;
+00261 | kernel_cpp_v810.cpp:85   |     *s = sum;
+00262 | kernel_cpp_v810.cpp:86   |     *t = (a - a_virtual) + (b - b_virtual);
+00263 | kernel_cpp_v810.cpp:87   | }
+00264 | kernel_cpp_v810.cpp:88   | 
+00265 | kernel_cpp_v810.cpp:89   | static double twosum_tree_reduce_inplace(double* current, size_t N) {
+00266 | kernel_cpp_v810.cpp:90   |     if (N == 0) return 0.0;
+00267 | kernel_cpp_v810.cpp:91   |     if (N == 1) return current[0];
+00268 | kernel_cpp_v810.cpp:92   |     double err_acc = 0.0;
+00269 | kernel_cpp_v810.cpp:93   |     double err_comp = 0.0;
+00270 | kernel_cpp_v810.cpp:94   |     size_t len = N;
+00271 | kernel_cpp_v810.cpp:95   |     while (len > 1) {
+00272 | kernel_cpp_v810.cpp:96   |         size_t n_pairs = len / 2;
+00273 | kernel_cpp_v810.cpp:97   |         for (size_t i = 0; i < n_pairs; ++i) {
+00274 | kernel_cpp_v810.cpp:98   |             double s, t;
+00275 | kernel_cpp_v810.cpp:99   |             knuth_two_sum(current[2 * i], current[2 * i + 1], &s, &t);
+00276 | kernel_cpp_v810.cpp:100  |             current[i] = s;
+00277 | kernel_cpp_v810.cpp:101  |             if (t != 0.0) {
+00278 | kernel_cpp_v810.cpp:102  |                 double es, et;
+00279 | kernel_cpp_v810.cpp:103  |                 knuth_two_sum(err_acc, t, &es, &et);
+00280 | kernel_cpp_v810.cpp:104  |                 err_acc = es;
+00281 | kernel_cpp_v810.cpp:105  |                 err_comp += et;
+00282 | kernel_cpp_v810.cpp:106  |             }
+00283 | kernel_cpp_v810.cpp:107  |         }
+00284 | kernel_cpp_v810.cpp:108  |         if (len % 2 != 0) {
+00285 | kernel_cpp_v810.cpp:109  |             current[n_pairs] = current[len - 1];
+00286 | kernel_cpp_v810.cpp:110  |             len = n_pairs + 1;
+00287 | kernel_cpp_v810.cpp:111  |         } else {
+00288 | kernel_cpp_v810.cpp:112  |             len = n_pairs;
+00289 | kernel_cpp_v810.cpp:113  |         }
+00290 | kernel_cpp_v810.cpp:114  |     }
+00291 | kernel_cpp_v810.cpp:115  |     double total = current[0];
+00292 | kernel_cpp_v810.cpp:116  |     double s_final, t_final;
+00293 | kernel_cpp_v810.cpp:117  |     knuth_two_sum(total, err_acc, &s_final, &t_final);
+00294 | kernel_cpp_v810.cpp:118  |     return s_final + (t_final + err_comp);
+00295 | kernel_cpp_v810.cpp:119  | }
+00296 | kernel_cpp_v810.cpp:120  | 
+00297 | kernel_cpp_v810.cpp:121  | static double twosum_tree_reduce(const double* data, size_t N) {
+00298 | kernel_cpp_v810.cpp:122  |     if (N == 0) return 0.0;
+00299 | kernel_cpp_v810.cpp:123  |     if (N == 1) return data[0];
+00300 | kernel_cpp_v810.cpp:124  |     std::vector<double> current(data, data + N);
+00301 | kernel_cpp_v810.cpp:125  |     return twosum_tree_reduce_inplace(current.data(), N);
+00302 | kernel_cpp_v810.cpp:126  | }
+00303 | kernel_cpp_v810.cpp:127  | 
+00304 | kernel_cpp_v810.cpp:128  | /* ========================================================================= */
+00305 | kernel_cpp_v810.cpp:129  | /* 2. NON-TEMPORAL STREAMING STORES                                          */
+00306 | kernel_cpp_v810.cpp:130  | /* ========================================================================= */
+00307 | kernel_cpp_v810.cpp:131  | 
+00308 | kernel_cpp_v810.cpp:132  | POLYDIM_EXPORT int32_t polydim_stream_copy_nt(double* dest, const double* src, size_t count) {
+00309 | kernel_cpp_v810.cpp:133  |     if (!dest || !src) return POLYDIM_STATUS_ERR_NULL_PTR;
+00310 | kernel_cpp_v810.cpp:134  |     if (count == 0)    return POLYDIM_STATUS_OK;
+00311 | kernel_cpp_v810.cpp:135  |     // Overlap check: NT stores on overlapping regions produce undefined results
+00312 | kernel_cpp_v810.cpp:136  |     if (dest < src + count && src < dest + count) {
+00313 | kernel_cpp_v810.cpp:137  |         std::memmove(dest, src, count * sizeof(double));
+00314 | kernel_cpp_v810.cpp:138  |         return POLYDIM_STATUS_OK;
+00315 | kernel_cpp_v810.cpp:139  |     }
+00316 | kernel_cpp_v810.cpp:140  | #if defined(__x86_64__) || defined(_M_X64)
+00317 | kernel_cpp_v810.cpp:141  |     size_t i = 0;
+00318 | kernel_cpp_v810.cpp:142  |     if ((reinterpret_cast<uintptr_t>(dest) % 16 == 0) && count >= 2) {
+00319 | kernel_cpp_v810.cpp:143  |         size_t sse_blocks = count / 2;
+00320 | kernel_cpp_v810.cpp:144  |         #pragma omp parallel for schedule(static)
+00321 | kernel_cpp_v810.cpp:145  |         for (size_t b = 0; b < sse_blocks; ++b) {
+00322 | kernel_cpp_v810.cpp:146  |             size_t idx = b * 2;
+00323 | kernel_cpp_v810.cpp:147  |             _mm_stream_pd(&dest[idx], _mm_loadu_pd(&src[idx]));
+00324 | kernel_cpp_v810.cpp:148  |         }
+00325 | kernel_cpp_v810.cpp:149  |         i = sse_blocks * 2;
+00326 | kernel_cpp_v810.cpp:150  |     }
+00327 | kernel_cpp_v810.cpp:151  |     for (; i < count; ++i) dest[i] = src[i];
+00328 | kernel_cpp_v810.cpp:152  |     _mm_sfence();
+00329 | kernel_cpp_v810.cpp:153  | #else
+00330 | kernel_cpp_v810.cpp:154  |     std::memcpy(dest, src, count * sizeof(double));
+00331 | kernel_cpp_v810.cpp:155  | #endif
+00332 | kernel_cpp_v810.cpp:156  |     std::atomic_thread_fence(std::memory_order_seq_cst);
+00333 | kernel_cpp_v810.cpp:157  |     return POLYDIM_STATUS_OK;
+00334 | kernel_cpp_v810.cpp:158  | }
+00335 | kernel_cpp_v810.cpp:159  | 
+00336 | kernel_cpp_v810.cpp:160  | /* ========================================================================= */
+00337 | kernel_cpp_v810.cpp:161  | /* 3. ALLOCATOR (G11: alineacion minima sizeof(void*))                        */
+00338 | kernel_cpp_v810.cpp:162  | /* ========================================================================= */
+00339 | kernel_cpp_v810.cpp:163  | 
+00340 | kernel_cpp_v810.cpp:164  | static std::atomic<uint64_t> g_allocation_seq{1};
+00341 | kernel_cpp_v810.cpp:165  | 
+00342 | kernel_cpp_v810.cpp:166  | POLYDIM_EXPORT void* polydim_alloc_aligned(size_t bytes, size_t alignment) {
+00343 | kernel_cpp_v810.cpp:167  |     if (bytes == 0) return nullptr;
+00344 | kernel_cpp_v810.cpp:168  |     size_t align = (alignment > 0) ? alignment : 64;
+00345 | kernel_cpp_v810.cpp:169  |     if ((align & (align - 1)) != 0) return nullptr;     /* rechazar no-potencias de 2 */
+00346 | kernel_cpp_v810.cpp:170  |     if (align < sizeof(void*)) align = sizeof(void*);   /* exigido por posix_memalign/_aligned_malloc */
+00347 | kernel_cpp_v810.cpp:171  | #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
+00348 | kernel_cpp_v810.cpp:172  |     return _aligned_malloc(bytes, align);
+00349 | kernel_cpp_v810.cpp:173  | #else
+00350 | kernel_cpp_v810.cpp:174  |     void* ptr = nullptr;
+00351 | kernel_cpp_v810.cpp:175  |     if (posix_memalign(&ptr, align, bytes) != 0) return nullptr;
+00352 | kernel_cpp_v810.cpp:176  |     return ptr;
+00353 | kernel_cpp_v810.cpp:177  | #endif
+00354 | kernel_cpp_v810.cpp:178  | }
+00355 | kernel_cpp_v810.cpp:179  | 
+00356 | kernel_cpp_v810.cpp:180  | POLYDIM_EXPORT void polydim_free_aligned(void* ptr) {
+00357 | kernel_cpp_v810.cpp:181  |     if (!ptr) return;
+00358 | kernel_cpp_v810.cpp:182  | #if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
+00359 | kernel_cpp_v810.cpp:183  |     _aligned_free(ptr);
+00360 | kernel_cpp_v810.cpp:184  | #else
+00361 | kernel_cpp_v810.cpp:185  |     free(ptr);
+00362 | kernel_cpp_v810.cpp:186  | #endif
+00363 | kernel_cpp_v810.cpp:187  | }
+00364 | kernel_cpp_v810.cpp:188  | 
+00365 | kernel_cpp_v810.cpp:189  | POLYDIM_EXPORT PolydimHandle* polydim_handle_create(size_t bytes, size_t alignment) {
+00366 | kernel_cpp_v810.cpp:190  |     void* data = polydim_alloc_aligned(bytes, alignment);
+00367 | kernel_cpp_v810.cpp:191  |     if (!data) return nullptr;
+00368 | kernel_cpp_v810.cpp:192  |     PolydimHandle* h = static_cast<PolydimHandle*>(std::malloc(sizeof(PolydimHandle)));
+00369 | kernel_cpp_v810.cpp:193  |     if (!h) { polydim_free_aligned(data); return nullptr; }
+00370 | kernel_cpp_v810.cpp:194  |     h->data = data;
+00371 | kernel_cpp_v810.cpp:195  |     h->bytes = bytes;
+00372 | kernel_cpp_v810.cpp:196  |     reinterpret_cast<std::atomic<int32_t>*>(&h->refcount)->store(1, std::memory_order_release);
+00373 | kernel_cpp_v810.cpp:197  |     h->flags = 0;
+00374 | kernel_cpp_v810.cpp:198  |     h->allocation_id = g_allocation_seq.fetch_add(1, std::memory_order_relaxed);
+00375 | kernel_cpp_v810.cpp:199  |     return h;
+00376 | kernel_cpp_v810.cpp:200  | }
+00377 | kernel_cpp_v810.cpp:201  | 
+00378 | kernel_cpp_v810.cpp:202  | POLYDIM_EXPORT void polydim_handle_retain(PolydimHandle* h) {
+00379 | kernel_cpp_v810.cpp:203  |     if (!h) return;
+00380 | kernel_cpp_v810.cpp:204  |     // Sincronizacion estricta acq_rel para eliminar ventana UAF frente a concurrent release
+00381 | kernel_cpp_v810.cpp:205  |     reinterpret_cast<std::atomic<int32_t>*>(&h->refcount)->fetch_add(1, std::memory_order_acq_rel);
+00382 | kernel_cpp_v810.cpp:206  | }
+00383 | kernel_cpp_v810.cpp:207  | 
+00384 | kernel_cpp_v810.cpp:208  | POLYDIM_EXPORT void polydim_handle_release(PolydimHandle* h) {
+00385 | kernel_cpp_v810.cpp:209  |     if (!h) return;
+00386 | kernel_cpp_v810.cpp:210  |     if (reinterpret_cast<std::atomic<int32_t>*>(&h->refcount)->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+00387 | kernel_cpp_v810.cpp:211  |         if (h->data) { polydim_free_aligned(h->data); h->data = nullptr; }
+00388 | kernel_cpp_v810.cpp:212  |         std::free(h);
+00389 | kernel_cpp_v810.cpp:213  |     }
+00390 | kernel_cpp_v810.cpp:214  | }
+00391 | kernel_cpp_v810.cpp:215  | 
+00392 | kernel_cpp_v810.cpp:216  | /* ========================================================================= */
+00393 | kernel_cpp_v810.cpp:217  | /* 4. SPSC RING (G12: overflow de capacidad validado)                         */
+00394 | kernel_cpp_v810.cpp:218  | /* ========================================================================= */
+00395 | kernel_cpp_v810.cpp:219  | 
+00396 | kernel_cpp_v810.cpp:220  | POLYDIM_EXPORT int32_t polydim_spsc_init(PolydimSpscRing* ring, size_t capacity) {
+00397 | kernel_cpp_v810.cpp:221  |     if (!ring) return POLYDIM_STATUS_ERR_NULL_PTR;
+00398 | kernel_cpp_v810.cpp:222  |     if (capacity < 2 || (capacity & (capacity - 1)) != 0) return POLYDIM_STATUS_ERR_INVALID_DIM;
+00399 | kernel_cpp_v810.cpp:223  |     if (capacity > SIZE_MAX / sizeof(PolydimTelemetryEvent)) return POLYDIM_STATUS_ERR_INVALID_DIM;
+00400 | kernel_cpp_v810.cpp:224  |     size_t total_bytes = capacity * sizeof(PolydimTelemetryEvent);
+00401 | kernel_cpp_v810.cpp:225  |     PolydimTelemetryEvent* buffer =
+00402 | kernel_cpp_v810.cpp:226  |         static_cast<PolydimTelemetryEvent*>(polydim_alloc_aligned(total_bytes, 128));
+00403 | kernel_cpp_v810.cpp:227  |     if (!buffer) return POLYDIM_STATUS_ERR_ALLOC;
+00404 | kernel_cpp_v810.cpp:228  |     std::memset(buffer, 0, total_bytes);
+00405 | kernel_cpp_v810.cpp:229  |     reinterpret_cast<std::atomic<uint64_t>*>(&ring->write_index)->store(0, std::memory_order_relaxed);
+00406 | kernel_cpp_v810.cpp:230  |     reinterpret_cast<std::atomic<uint64_t>*>(&ring->read_index)->store(0, std::memory_order_relaxed);
+00407 | kernel_cpp_v810.cpp:231  |     ring->capacity = capacity;
+00408 | kernel_cpp_v810.cpp:232  |     ring->capacity_mask = capacity - 1;
+00409 | kernel_cpp_v810.cpp:233  |     ring->ring_buffer = buffer;
+00410 | kernel_cpp_v810.cpp:234  |     std::atomic_thread_fence(std::memory_order_seq_cst);
+00411 | kernel_cpp_v810.cpp:235  |     return POLYDIM_STATUS_OK;
+00412 | kernel_cpp_v810.cpp:236  | }
+00413 | kernel_cpp_v810.cpp:237  | 
+00414 | kernel_cpp_v810.cpp:238  | POLYDIM_EXPORT int32_t polydim_spsc_push(PolydimSpscRing* ring, const PolydimTelemetryEvent* event) {
+00415 | kernel_cpp_v810.cpp:239  |     if (!ring || !event || !ring->ring_buffer) return POLYDIM_STATUS_ERR_NULL_PTR;
+00416 | kernel_cpp_v810.cpp:240  |     std::atomic<uint64_t>* w = reinterpret_cast<std::atomic<uint64_t>*>(&ring->write_index);
+00417 | kernel_cpp_v810.cpp:241  |     std::atomic<uint64_t>* r = reinterpret_cast<std::atomic<uint64_t>*>(&ring->read_index);
+00418 | kernel_cpp_v810.cpp:242  |     uint64_t wi = w->load(std::memory_order_relaxed);
+00419 | kernel_cpp_v810.cpp:243  |     uint64_t ri = r->load(std::memory_order_acquire);
+00420 | kernel_cpp_v810.cpp:244  |     if (wi - ri >= ring->capacity) return POLYDIM_STATUS_ERR_RING_FULL;
+00421 | kernel_cpp_v810.cpp:245  |     ring->ring_buffer[wi & ring->capacity_mask] = *event;
+00422 | kernel_cpp_v810.cpp:246  |     std::atomic_thread_fence(std::memory_order_release);
+00423 | kernel_cpp_v810.cpp:247  |     w->store(wi + 1, std::memory_order_release);
+00424 | kernel_cpp_v810.cpp:248  |     return POLYDIM_STATUS_OK;
+00425 | kernel_cpp_v810.cpp:249  | }
+00426 | kernel_cpp_v810.cpp:250  | 
+00427 | kernel_cpp_v810.cpp:251  | POLYDIM_EXPORT int32_t polydim_spsc_pop(PolydimSpscRing* ring, PolydimTelemetryEvent* event) {
+00428 | kernel_cpp_v810.cpp:252  |     if (!ring || !event || !ring->ring_buffer) return POLYDIM_STATUS_ERR_NULL_PTR;
+00429 | kernel_cpp_v810.cpp:253  |     std::atomic<uint64_t>* w = reinterpret_cast<std::atomic<uint64_t>*>(&ring->write_index);
+00430 | kernel_cpp_v810.cpp:254  |     std::atomic<uint64_t>* r = reinterpret_cast<std::atomic<uint64_t>*>(&ring->read_index);
+00431 | kernel_cpp_v810.cpp:255  |     uint64_t ri = r->load(std::memory_order_relaxed);
+00432 | kernel_cpp_v810.cpp:256  |     uint64_t wi = w->load(std::memory_order_acquire);
+00433 | kernel_cpp_v810.cpp:257  |     if (ri == wi) return POLYDIM_STATUS_ERR_RING_EMPTY;
+00434 | kernel_cpp_v810.cpp:258  |     std::atomic_thread_fence(std::memory_order_acquire);
+00435 | kernel_cpp_v810.cpp:259  |     *event = ring->ring_buffer[ri & ring->capacity_mask];
+00436 | kernel_cpp_v810.cpp:260  |     r->store(ri + 1, std::memory_order_release);
+00437 | kernel_cpp_v810.cpp:261  |     return POLYDIM_STATUS_OK;
+00438 | kernel_cpp_v810.cpp:262  | }
+00439 | kernel_cpp_v810.cpp:263  | 
+00440 | kernel_cpp_v810.cpp:264  | POLYDIM_EXPORT void polydim_spsc_destroy(PolydimSpscRing* ring) {
+00441 | kernel_cpp_v810.cpp:265  |     if (!ring) return;
+00442 | kernel_cpp_v810.cpp:266  |     /* CONTRATO: solo llamar cuando productor y consumidor hayan terminado. */
+00443 | kernel_cpp_v810.cpp:267  |     if (ring->ring_buffer) { polydim_free_aligned(ring->ring_buffer); ring->ring_buffer = nullptr; }
+00444 | kernel_cpp_v810.cpp:268  |     ring->capacity = 0;
+00445 | kernel_cpp_v810.cpp:269  |     ring->capacity_mask = 0;
+00446 | kernel_cpp_v810.cpp:270  | }
+00447 | kernel_cpp_v810.cpp:271  | 
+00448 | kernel_cpp_v810.cpp:272  | /* ========================================================================= */
+00449 | kernel_cpp_v810.cpp:273  | /* 5. GRAMIANA DSYRK (buffer reusable en modo determinista)                   */
+00450 | kernel_cpp_v810.cpp:274  | /* ========================================================================= */
+00451 | kernel_cpp_v810.cpp:275  | 
+00452 | kernel_cpp_v810.cpp:276  | POLYDIM_EXPORT int32_t polydim_gram_dsyrk(const double* X, size_t D, size_t K,
+00453 | kernel_cpp_v810.cpp:277  |                                           double* K_out, uint32_t num_threads) {
+00454 | kernel_cpp_v810.cpp:278  |     if (!X || !K_out) return POLYDIM_STATUS_ERR_NULL_PTR;
+00455 | kernel_cpp_v810.cpp:279  |     if (D == 0 || K == 0) return POLYDIM_STATUS_ERR_INVALID_DIM;
+00456 | kernel_cpp_v810.cpp:280  |     int threads = (num_threads > 0) ? (int)num_threads : 1;
+00457 | kernel_cpp_v810.cpp:281  | #if defined(_OPENMP)
+00458 | kernel_cpp_v810.cpp:282  |     if (threads > 1) omp_set_num_threads(threads);
+00459 | kernel_cpp_v810.cpp:283  | #endif
+00460 | kernel_cpp_v810.cpp:284  |     std::memset(K_out, 0, K * K * sizeof(double));
+00461 | kernel_cpp_v810.cpp:285  |     if (g_fp_mode.load(std::memory_order_relaxed) == POLYDIM_FP_DETERMINISTIC) {
+00462 | kernel_cpp_v810.cpp:286  |         #pragma omp parallel
+00463 | kernel_cpp_v810.cpp:287  |         {
+00464 | kernel_cpp_v810.cpp:288  |             std::vector<double> products(D);                 /* un solo buffer por hilo */
+00465 | kernel_cpp_v810.cpp:289  |             #pragma omp for schedule(dynamic)
+00466 | kernel_cpp_v810.cpp:290  |             for (int64_t i = 0; i < (int64_t)K; ++i) {
+00467 | kernel_cpp_v810.cpp:291  |                 for (size_t j = (size_t)i; j < K; ++j) {
+00468 | kernel_cpp_v810.cpp:292  |                     for (size_t d = 0; d < D; ++d)
+00469 | kernel_cpp_v810.cpp:293  |                         products[d] = X[d * K + i] * X[d * K + j];
+00470 | kernel_cpp_v810.cpp:294  |                     double val = twosum_tree_reduce_inplace(products.data(), D);
+00471 | kernel_cpp_v810.cpp:295  |                     K_out[i * K + j] = val;
+00472 | kernel_cpp_v810.cpp:296  |                     K_out[j * K + i] = val;
+00473 | kernel_cpp_v810.cpp:297  |                 }
+00474 | kernel_cpp_v810.cpp:298  |             }
+00475 | kernel_cpp_v810.cpp:299  |         }
+00476 | kernel_cpp_v810.cpp:300  |     } else {
+00477 | kernel_cpp_v810.cpp:301  |         tiled_dsyrk_fixed(CblasTrans, K, D, 1.0, X, K, 0.0, K_out, K);
+00478 | kernel_cpp_v810.cpp:302  |         for (size_t i = 0; i < K; ++i)
+00479 | kernel_cpp_v810.cpp:303  |             for (size_t j = 0; j < i; ++j)
+00480 | kernel_cpp_v810.cpp:304  |                 K_out[i * K + j] = K_out[j * K + i];
+00481 | kernel_cpp_v810.cpp:305  |     }
+00482 | kernel_cpp_v810.cpp:306  |     return POLYDIM_STATUS_OK;
+00483 | kernel_cpp_v810.cpp:307  | }
+00484 | kernel_cpp_v810.cpp:308  | 
+00485 | kernel_cpp_v810.cpp:309  | /* ========================================================================= */
+00486 | kernel_cpp_v810.cpp:310  | /* 6. TILED DSYRK DE RESPALDO (G3: beta respetado, sin atomic) — reemplazo   */
+00487 | kernel_cpp_v810.cpp:311  | /*    del fallback de BlasLoader para uso directo.                            */
+00488 | kernel_cpp_v810.cpp:312  | /*    Invariante: cada (i,j) del triangulo superior pertenece a UN solo      */
+00489 | kernel_cpp_v810.cpp:313  | /*    tile (i0,j0) con j0>=i0, luego puede acumularse en registro y escribir */
+00490 | kernel_cpp_v810.cpp:314  | /*    una unica vez: c = alpha*acc + beta*c. Ninguna colision entre hilos.   */
+00491 | kernel_cpp_v810.cpp:315  | /* ========================================================================= */
+00492 | kernel_cpp_v810.cpp:316  | 
+00493 | kernel_cpp_v810.cpp:317  | static void tiled_dsyrk_fixed(int trans, size_t n, size_t k,
+00494 | kernel_cpp_v810.cpp:318  |                               double alpha, const double* __restrict__ a, size_t lda,
+00495 | kernel_cpp_v810.cpp:319  |                               double beta, double* __restrict__ c, size_t ldc) {
+00496 | kernel_cpp_v810.cpp:320  |     constexpr size_t TN = 32;
+00497 | kernel_cpp_v810.cpp:321  |     #pragma omp parallel for schedule(static)
+00498 | kernel_cpp_v810.cpp:322  |     for (int64_t i0 = 0; i0 < (int64_t)n; i0 += TN) {
+00499 | kernel_cpp_v810.cpp:323  |         for (int64_t j0 = i0; j0 < (int64_t)n; j0 += TN) {   /* j0 >= i0: un solo tile por (i,j) */
+00500 | kernel_cpp_v810.cpp:324  |             size_t i_max = std::min((size_t)(i0 + TN), n);
+00501 | kernel_cpp_v810.cpp:325  |             size_t j_max = std::min((size_t)(j0 + TN), n);
+00502 | kernel_cpp_v810.cpp:326  |             for (size_t i = (size_t)i0; i < i_max; ++i) {
+00503 | kernel_cpp_v810.cpp:327  |                 size_t j_start = (i0 == j0) ? std::max(i, (size_t)j0) : (size_t)j0;
+00504 | kernel_cpp_v810.cpp:328  |                 for (size_t j = j_start; j < j_max; ++j) {
+00505 | kernel_cpp_v810.cpp:329  |                     double acc = 0.0;
+00506 | kernel_cpp_v810.cpp:330  |                     if (trans == CblasTrans) {
+00507 | kernel_cpp_v810.cpp:331  |                         #pragma omp simd reduction(+:acc)
+00508 | kernel_cpp_v810.cpp:332  |                         for (size_t p = 0; p < k; ++p) acc += a[p * lda + i] * a[p * lda + j];
+00509 | kernel_cpp_v810.cpp:333  |                     } else {
+00510 | kernel_cpp_v810.cpp:334  |                         #pragma omp simd reduction(+:acc)
+00511 | kernel_cpp_v810.cpp:335  |                         for (size_t p = 0; p < k; ++p) acc += a[i * lda + p] * a[j * lda + p];
+00512 | kernel_cpp_v810.cpp:336  |                     }
+00513 | kernel_cpp_v810.cpp:337  |                     c[i * ldc + j] = alpha * acc + beta * c[i * ldc + j];   /* beta respetado, 1 escritura */
+00514 | kernel_cpp_v810.cpp:338  |                 }
+00515 | kernel_cpp_v810.cpp:339  |             }
+00516 | kernel_cpp_v810.cpp:340  |         }
+00517 | kernel_cpp_v810.cpp:341  |     }
+00518 | kernel_cpp_v810.cpp:342  | }
+00519 | kernel_cpp_v810.cpp:343  | 
+00520 | kernel_cpp_v810.cpp:344  | /* ========================================================================= */
+00521 | kernel_cpp_v810.cpp:345  | /* 7. SOLVER LINEAL (G8: umbral de pivote relativo a la escala de A)          */
+00522 | kernel_cpp_v810.cpp:346  | /* ========================================================================= */
+00523 | kernel_cpp_v810.cpp:347  | 
+00524 | kernel_cpp_v810.cpp:348  | static bool solve_linear_system_general(double* A, double* B, size_t N, size_t NRHS) {
+00525 | kernel_cpp_v810.cpp:349  |     /* Escala de referencia: max|A|. Un umbral absoluto (1e-15) declara
+00526 | kernel_cpp_v810.cpp:350  |      * "singular" a sistemas legitimos pequenos y acepta pivotes basura en
+00527 | kernel_cpp_v810.cpp:351  |      * sistemas grandes. */
+00528 | kernel_cpp_v810.cpp:352  |     double scale = 0.0;
+00529 | kernel_cpp_v810.cpp:353  |     for (size_t i = 0; i < N * N; ++i) scale = std::max(scale, std::abs(A[i]));
+00530 | kernel_cpp_v810.cpp:354  |     if (!std::isfinite(scale)) return false;
+00531 | kernel_cpp_v810.cpp:355  |     const double pivot_thresh = scale * 1e-15 + 1e-300;
+00532 | kernel_cpp_v810.cpp:356  | 
+00533 | kernel_cpp_v810.cpp:357  |     for (size_t i = 0; i < N; ++i) {
+00534 | kernel_cpp_v810.cpp:358  |         size_t pivot = i;
+00535 | kernel_cpp_v810.cpp:359  |         double max_val = std::abs(A[i * N + i]);
+00536 | kernel_cpp_v810.cpp:360  |         for (size_t r = i + 1; r < N; ++r) {
+00537 | kernel_cpp_v810.cpp:361  |             double v = std::abs(A[r * N + i]);
+00538 | kernel_cpp_v810.cpp:362  |             if (v > max_val) { max_val = v; pivot = r; }
+00539 | kernel_cpp_v810.cpp:363  |         }
+00540 | kernel_cpp_v810.cpp:364  |         if (max_val < pivot_thresh) return false;
+00541 | kernel_cpp_v810.cpp:365  |         if (pivot != i) {
+00542 | kernel_cpp_v810.cpp:366  |             for (size_t cc = 0; cc < N; ++cc)     std::swap(A[i * N + cc], A[pivot * N + cc]);
+00543 | kernel_cpp_v810.cpp:367  |             for (size_t cc = 0; cc < NRHS; ++cc)  std::swap(B[i * NRHS + cc], B[pivot * NRHS + cc]);
+00544 | kernel_cpp_v810.cpp:368  |         }
+00545 | kernel_cpp_v810.cpp:369  |         double diag = A[i * N + i];
+00546 | kernel_cpp_v810.cpp:370  |         for (size_t cc = i; cc < N; ++cc)    A[i * N + cc] /= diag;
+00547 | kernel_cpp_v810.cpp:371  |         for (size_t cc = 0; cc < NRHS; ++cc) B[i * NRHS + cc] /= diag;
+00548 | kernel_cpp_v810.cpp:372  |         for (size_t r = 0; r < N; ++r) {
+00549 | kernel_cpp_v810.cpp:373  |             if (r == i) continue;
+00550 | kernel_cpp_v810.cpp:374  |             double f = A[r * N + i];
+00551 | kernel_cpp_v810.cpp:375  |             if (f == 0.0) continue;
+00552 | kernel_cpp_v810.cpp:376  |             for (size_t cc = i; cc < N; ++cc)    A[r * N + cc] -= f * A[i * N + cc];
+00553 | kernel_cpp_v810.cpp:377  |             for (size_t cc = 0; cc < NRHS; ++cc) B[r * NRHS + cc] -= f * B[i * NRHS + cc];
+00554 | kernel_cpp_v810.cpp:378  |         }
+00555 | kernel_cpp_v810.cpp:379  |     }
+00556 | kernel_cpp_v810.cpp:380  |     return true;
+00557 | kernel_cpp_v810.cpp:381  | }
+00558 | kernel_cpp_v810.cpp:382  | 
+00559 | kernel_cpp_v810.cpp:383  | static double frobenius_diff(const double* A, const double* B, size_t n) {
+00560 | kernel_cpp_v810.cpp:384  |     double s = 0.0;
+00561 | kernel_cpp_v810.cpp:385  |     #pragma omp simd reduction(+:s)
+00562 | kernel_cpp_v810.cpp:386  |     for (size_t i = 0; i < n; ++i) { double d = A[i] - B[i]; s += d * d; }
+00563 | kernel_cpp_v810.cpp:387  |     return std::sqrt(s);
+00564 | kernel_cpp_v810.cpp:388  | }
+00565 | kernel_cpp_v810.cpp:389  | 
+00566 | kernel_cpp_v810.cpp:390  | /* ========================================================================= */
+00567 | kernel_cpp_v810.cpp:391  | /* 8. VtZ Y PROYECCION TANGENCIAL (G6': sin atomicas; scratch por hilo)       */
+00568 | kernel_cpp_v810.cpp:392  | /* ========================================================================= */
+00569 | kernel_cpp_v810.cpp:393  | 
+00570 | kernel_cpp_v810.cpp:394  | /* VtZ[i*K+j] = sum_d V[d*K+i] * Z[d*K+j], d-parallel, merge O(K^2) una vez. */
+00571 | kernel_cpp_v810.cpp:395  | static void compute_VtZ(const double* __restrict__ V, const double* __restrict__ Z, double* __restrict__ VtZ, size_t D, size_t K) {
+00572 | kernel_cpp_v810.cpp:396  |     std::fill(VtZ, VtZ + K * K, 0.0);
+00573 | kernel_cpp_v810.cpp:397  |     int num_threads = omp_get_max_threads();
+00574 | kernel_cpp_v810.cpp:398  |     std::vector<double> scratch(num_threads * K * K, 0.0);
+00575 | kernel_cpp_v810.cpp:399  |     #pragma omp parallel
+00576 | kernel_cpp_v810.cpp:400  |     {
+00577 | kernel_cpp_v810.cpp:401  |         int tid = omp_get_thread_num();
+00578 | kernel_cpp_v810.cpp:402  |         double* __restrict__ local = &scratch[tid * K * K];
+00579 | kernel_cpp_v810.cpp:403  |         #pragma omp for schedule(static)
+00580 | kernel_cpp_v810.cpp:404  |         for (int64_t d = 0; d < (int64_t)D; ++d) {
+00581 | kernel_cpp_v810.cpp:405  |             for (size_t i = 0; i < K; ++i) {
+00582 | kernel_cpp_v810.cpp:406  |                 double vd = V[d * K + i];
+00583 | kernel_cpp_v810.cpp:407  |                 for (size_t j = 0; j < K; ++j) {
+00584 | kernel_cpp_v810.cpp:408  |                     local[i * K + j] += vd * Z[d * K + j];
+00585 | kernel_cpp_v810.cpp:409  |                 }
+00586 | kernel_cpp_v810.cpp:410  |             }
+00587 | kernel_cpp_v810.cpp:411  |         }
+00588 | kernel_cpp_v810.cpp:412  |         #pragma omp for schedule(static)
+00589 | kernel_cpp_v810.cpp:413  |         for (int64_t t = 0; t < (int64_t)(K * K); ++t) {
+00590 | kernel_cpp_v810.cpp:414  |             double sum = 0;
+00591 | kernel_cpp_v810.cpp:415  |             for (int th = 0; th < num_threads; ++th) sum += scratch[th * K * K + t];
+00592 | kernel_cpp_v810.cpp:416  |             VtZ[t] = sum;
+00593 | kernel_cpp_v810.cpp:417  |         }
+00594 | kernel_cpp_v810.cpp:418  |     }
+00595 | kernel_cpp_v810.cpp:419  | }
+00596 | kernel_cpp_v810.cpp:420  | 
+00597 | kernel_cpp_v810.cpp:421  | /* Z <- Z - V * sym(V^T Z)  (proyeccion ortogonal a T_V St(D,K) si V ortonormal) */
+00598 | kernel_cpp_v810.cpp:422  | static void project_to_tangent_space(const double* V, double* Z, size_t D, size_t K) {
+00599 | kernel_cpp_v810.cpp:423  |     std::vector<double> VtZ(K * K, 0.0);
+00600 | kernel_cpp_v810.cpp:424  |     compute_VtZ(V, Z, VtZ.data(), D, K);
+00601 | kernel_cpp_v810.cpp:425  |     std::vector<double> sym(K * K, 0.0);
+00602 | kernel_cpp_v810.cpp:426  |     for (size_t i = 0; i < K; ++i)
+00603 | kernel_cpp_v810.cpp:427  |         for (size_t j = 0; j < K; ++j)
+00604 | kernel_cpp_v810.cpp:428  |             sym[i * K + j] = 0.5 * (VtZ[i * K + j] + VtZ[j * K + i]);
+00605 | kernel_cpp_v810.cpp:429  |     #pragma omp parallel for schedule(static)
+00606 | kernel_cpp_v810.cpp:430  |     for (int64_t d = 0; d < (int64_t)D; ++d) {
+00607 | kernel_cpp_v810.cpp:431  |         double row[/*K*/ 256];                    /* K <= 256 en este kernel; ver guarda abajo */
+00608 | kernel_cpp_v810.cpp:432  |         if (K > 256) { /* fallback lento, correcto para K grande */
+00609 | kernel_cpp_v810.cpp:433  |             std::vector<double> tmp(K, 0.0);
+00610 | kernel_cpp_v810.cpp:434  |             for (size_t k = 0; k < K; ++k) {
+00611 | kernel_cpp_v810.cpp:435  |                 double acc = 0.0;
+00612 | kernel_cpp_v810.cpp:436  |                 for (size_t j = 0; j < K; ++j) acc += V[d * K + j] * sym[j * K + k];
+00613 | kernel_cpp_v810.cpp:437  |                 tmp[k] = acc;
+00614 | kernel_cpp_v810.cpp:438  |             }
+00615 | kernel_cpp_v810.cpp:439  |             for (size_t k = 0; k < K; ++k) Z[d * K + k] -= tmp[k];
+00616 | kernel_cpp_v810.cpp:440  |             continue;
+00617 | kernel_cpp_v810.cpp:441  |         }
+00618 | kernel_cpp_v810.cpp:442  |         for (size_t k = 0; k < K; ++k) {
+00619 | kernel_cpp_v810.cpp:443  |             double acc = 0.0;
+00620 | kernel_cpp_v810.cpp:444  |             for (size_t j = 0; j < K; ++j) acc += V[d * K + j] * sym[j * K + k];
+00621 | kernel_cpp_v810.cpp:445  |             row[k] = acc;
+00622 | kernel_cpp_v810.cpp:446  |         }
+00623 | kernel_cpp_v810.cpp:447  |         for (size_t k = 0; k < K; ++k) Z[d * K + k] -= row[k];
+00624 | kernel_cpp_v810.cpp:448  |     }
+00625 | kernel_cpp_v810.cpp:449  | }
+00626 | kernel_cpp_v810.cpp:450  | 
+00627 | kernel_cpp_v810.cpp:451  | /* Refinamiento polar de Newton cuadratico con criterio de parada. */
+00628 | kernel_cpp_v810.cpp:452  | static void polar_newton_refinement(double* V, size_t D, size_t K, uint32_t num_threads, double tol) {
+00629 | kernel_cpp_v810.cpp:453  |     std::vector<double> S(K * K, 0.0);
+00630 | kernel_cpp_v810.cpp:454  |     for (int pass = 0; pass < 8; ++pass) {
+00631 | kernel_cpp_v810.cpp:455  |         polydim_gram_dsyrk(V, D, K, S.data(), num_threads);
+00632 | kernel_cpp_v810.cpp:456  |         double err = 0.0;
+00633 | kernel_cpp_v810.cpp:457  |         for (size_t i = 0; i < K; ++i)
+00634 | kernel_cpp_v810.cpp:458  |             for (size_t j = 0; j < K; ++j) {
+00635 | kernel_cpp_v810.cpp:459  |                 double e = S[i * K + j] - (i == j ? 1.0 : 0.0);
+00636 | kernel_cpp_v810.cpp:460  |                 err += e * e;
+00637 | kernel_cpp_v810.cpp:461  |             }
+00638 | kernel_cpp_v810.cpp:462  |         if (std::sqrt(err) < tol) break;                 /* convergencia: 1 pasada no basta siempre */
+00639 | kernel_cpp_v810.cpp:463  |         #pragma omp parallel for schedule(static)
+00640 | kernel_cpp_v810.cpp:464  |         for (int64_t d = 0; d < (int64_t)D; ++d) {
+00641 | kernel_cpp_v810.cpp:465  |             double tmp[256];
+00642 | kernel_cpp_v810.cpp:466  |             if (K > 256) {
+00643 | kernel_cpp_v810.cpp:467  |                 std::vector<double> big(K, 0.0);
+00644 | kernel_cpp_v810.cpp:468  |                 for (size_t k = 0; k < K; ++k) {
+00645 | kernel_cpp_v810.cpp:469  |                     double acc = 0.0;
+00646 | kernel_cpp_v810.cpp:470  |                     for (size_t j = 0; j < K; ++j)
+00647 | kernel_cpp_v810.cpp:471  |                         acc += V[d * K + j] * (1.5 * (j == k ? 1.0 : 0.0) - 0.5 * S[j * K + k]);
+00648 | kernel_cpp_v810.cpp:472  |                     big[k] = acc;
+00649 | kernel_cpp_v810.cpp:473  |                 }
+00650 | kernel_cpp_v810.cpp:474  |                 for (size_t k = 0; k < K; ++k) V[d * K + k] = big[k];
+00651 | kernel_cpp_v810.cpp:475  |                 continue;
+00652 | kernel_cpp_v810.cpp:476  |             }
+00653 | kernel_cpp_v810.cpp:477  |             for (size_t k = 0; k < K; ++k) {
+00654 | kernel_cpp_v810.cpp:478  |                 double acc = 0.0;
+00655 | kernel_cpp_v810.cpp:479  |                 for (size_t j = 0; j < K; ++j)
+00656 | kernel_cpp_v810.cpp:480  |                     acc += V[d * K + j] * (1.5 * (j == k ? 1.0 : 0.0) - 0.5 * S[j * K + k]);
+00657 | kernel_cpp_v810.cpp:481  |                 tmp[k] = acc;
+00658 | kernel_cpp_v810.cpp:482  |             }
+00659 | kernel_cpp_v810.cpp:483  |             for (size_t k = 0; k < K; ++k) V[d * K + k] = tmp[k];
+00660 | kernel_cpp_v810.cpp:484  |         }
+00661 | kernel_cpp_v810.cpp:485  |     }
+00662 | kernel_cpp_v810.cpp:486  | }
+00663 | kernel_cpp_v810.cpp:487  | 
+00664 | kernel_cpp_v810.cpp:488  | /* ========================================================================= */
+00665 | kernel_cpp_v810.cpp:489  | /* 9. SHIFTED CHOLQR2 (G7: shift a TODA la diagonal antes de factorizar)      */
+00666 | kernel_cpp_v810.cpp:490  | /* ========================================================================= */
+00667 | kernel_cpp_v810.cpp:491  | 
+00668 | kernel_cpp_v810.cpp:492  | static int32_t apply_shifted_cholqr2(double* X, size_t D, size_t K,
+00669 | kernel_cpp_v810.cpp:493  |                                      double shift_regularization, uint32_t num_threads) {
+00670 | kernel_cpp_v810.cpp:494  |     std::vector<double> G(K * K, 0.0);
+00671 | kernel_cpp_v810.cpp:495  |     polydim_gram_dsyrk(X, D, K, G.data(), num_threads);
+00672 | kernel_cpp_v810.cpp:496  | 
+00673 | kernel_cpp_v810.cpp:497  |     double trace = 0.0;
+00674 | kernel_cpp_v810.cpp:498  |     for (size_t i = 0; i < K; ++i) trace += G[i * K + i];
+00675 | kernel_cpp_v810.cpp:499  |     double mean_diag = trace / (double)K;
+00676 | kernel_cpp_v810.cpp:500  | 
+00677 | kernel_cpp_v810.cpp:501  |     /* Tikhonov REAL: G + sigma*I antes de factorizar. El patch por pivote de
+00678 | kernel_cpp_v810.cpp:502  |      * V808 corrompia la coherencia de la factorizacion en los casos casi
+00679 | kernel_cpp_v810.cpp:503  |      * singulares — que son exactamente los que el shift existe para salvar. */
+00680 | kernel_cpp_v810.cpp:504  |     double sigma = (shift_regularization > 0.0 ? shift_regularization : 1e-14) * mean_diag;
+00681 | kernel_cpp_v810.cpp:505  |     for (size_t i = 0; i < K; ++i) G[i * K + i] += sigma;
+00682 | kernel_cpp_v810.cpp:506  | 
+00683 | kernel_cpp_v810.cpp:507  |     std::vector<double> L(K * K, 0.0);
+00684 | kernel_cpp_v810.cpp:508  |     for (size_t i = 0; i < K; ++i) {
+00685 | kernel_cpp_v810.cpp:509  |         for (size_t j = 0; j <= i; ++j) {
+00686 | kernel_cpp_v810.cpp:510  |             double sum = G[i * K + j];
+00687 | kernel_cpp_v810.cpp:511  |             for (size_t k = 0; k < j; ++k) sum -= L[i * K + k] * L[j * K + k];
+00688 | kernel_cpp_v810.cpp:512  |             if (i == j) {
+00689 | kernel_cpp_v810.cpp:513  |                 double val = sum;                          /* G ya regularizada: si aun asi cae,
+00690 | kernel_cpp_v810.cpp:514  |                                                               es rango deficiente real */
+00691 | kernel_cpp_v810.cpp:515  |                 if (val <= 0.0) val = 1e-300;
+00692 | kernel_cpp_v810.cpp:516  |                 L[i * K + j] = std::sqrt(val);
+00693 | kernel_cpp_v810.cpp:517  |             } else {
+00694 | kernel_cpp_v810.cpp:518  |                 L[i * K + j] = sum / L[j * K + j];
+00695 | kernel_cpp_v810.cpp:519  |             }
+00696 | kernel_cpp_v810.cpp:520  |         }
+00697 | kernel_cpp_v810.cpp:521  |     }
+00698 | kernel_cpp_v810.cpp:522  | 
+00699 | kernel_cpp_v810.cpp:523  |     /* X = Q L^T  =>  Q = X L^{-T}. Linv = L^{-1} (triangular inferior). */
+00700 | kernel_cpp_v810.cpp:524  |     std::vector<double> Linv(K * K, 0.0);
+00701 | kernel_cpp_v810.cpp:525  |     for (size_t i = 0; i < K; ++i) {
+00702 | kernel_cpp_v810.cpp:526  |         Linv[i * K + i] = 1.0 / L[i * K + i];
+00703 | kernel_cpp_v810.cpp:527  |         for (size_t j = 0; j < i; ++j) {
+00704 | kernel_cpp_v810.cpp:528  |             double sum = 0.0;
+00705 | kernel_cpp_v810.cpp:529  |             for (size_t k = j; k < i; ++k) sum -= L[i * K + k] * Linv[k * K + j];
+00706 | kernel_cpp_v810.cpp:530  |             Linv[i * K + j] = sum / L[i * K + i];
+00707 | kernel_cpp_v810.cpp:531  |         }
+00708 | kernel_cpp_v810.cpp:532  |     }
+00709 | kernel_cpp_v810.cpp:533  | 
+00710 | kernel_cpp_v810.cpp:534  |     #pragma omp parallel for schedule(static)
+00711 | kernel_cpp_v810.cpp:535  |     for (int64_t d = 0; d < (int64_t)D; ++d) {
+00712 | kernel_cpp_v810.cpp:536  |         double tmp[256];
+00713 | kernel_cpp_v810.cpp:537  |         double* row = tmp;
+00714 | kernel_cpp_v810.cpp:538  |         std::vector<double> big;
+00715 | kernel_cpp_v810.cpp:539  |         if (K > 256) { big.resize(K); row = big.data(); }
+00716 | kernel_cpp_v810.cpp:540  |         for (size_t k = 0; k < K; ++k) {
+00717 | kernel_cpp_v810.cpp:541  |             double acc = 0.0;
+00718 | kernel_cpp_v810.cpp:542  |             for (size_t j = 0; j < K; ++j) acc += X[d * K + j] * Linv[k * K + j];
+00719 | kernel_cpp_v810.cpp:543  |             row[k] = acc;
+00720 | kernel_cpp_v810.cpp:544  |         }
+00721 | kernel_cpp_v810.cpp:545  |         for (size_t k = 0; k < K; ++k) X[d * K + k] = row[k];
+00722 | kernel_cpp_v810.cpp:546  |     }
+00723 | kernel_cpp_v810.cpp:547  | 
+00724 | kernel_cpp_v810.cpp:548  |     polar_newton_refinement(X, D, K, num_threads, 1e-14);
+00725 | kernel_cpp_v810.cpp:549  |     return POLYDIM_STATUS_OK;
+00726 | kernel_cpp_v810.cpp:550  | }
+00727 | kernel_cpp_v810.cpp:551  | 
+00728 | kernel_cpp_v810.cpp:552  | /* ========================================================================= */
+00729 | kernel_cpp_v810.cpp:553  | /* 10. RETRACCION CAYLEY-SMW                                                  */
+00730 | kernel_cpp_v810.cpp:554  | /* ========================================================================= */
+00731 | kernel_cpp_v810.cpp:555  | 
+00732 | kernel_cpp_v810.cpp:556  | static int32_t retract_cayley_smw_mixed(double* V, double* Z, size_t D, size_t K,
+00733 | kernel_cpp_v810.cpp:557  |                                         double tau, double shift_regularization, uint32_t num_threads) {
+00734 | kernel_cpp_v810.cpp:558  |     project_to_tangent_space(V, Z, D, K);
+00735 | kernel_cpp_v810.cpp:559  | 
+00736 | kernel_cpp_v810.cpp:560  |     const size_t K2 = 2 * K;
+00737 | kernel_cpp_v810.cpp:561  |     std::vector<double> VtV(K * K, 0.0), ZtZ(K * K, 0.0), VtZ(K * K, 0.0);
+00738 | kernel_cpp_v810.cpp:562  |     polydim_gram_dsyrk(V, D, K, VtV.data(), num_threads);
+00739 | kernel_cpp_v810.cpp:563  |     polydim_gram_dsyrk(Z, D, K, ZtZ.data(), num_threads);
+00740 | kernel_cpp_v810.cpp:564  |     compute_VtZ(V, Z, VtZ.data(), D, K);
+00741 | kernel_cpp_v810.cpp:565  | 
+00742 | kernel_cpp_v810.cpp:566  |     std::vector<double> QtP(K2 * K2, 0.0);
+00743 | kernel_cpp_v810.cpp:567  |     for (size_t i = 0; i < K; ++i)
+00744 | kernel_cpp_v810.cpp:568  |         for (size_t j = 0; j < K; ++j) {
+00745 | kernel_cpp_v810.cpp:569  |             QtP[i * K2 + j]             =  VtZ[i * K + j];
+00746 | kernel_cpp_v810.cpp:570  |             QtP[i * K2 + (K + j)]       =  VtV[i * K + j];
+00747 | kernel_cpp_v810.cpp:571  |             QtP[(K + i) * K2 + j]       = -ZtZ[i * K + j];
+00748 | kernel_cpp_v810.cpp:572  |             QtP[(K + i) * K2 + (K + j)] = -VtZ[j * K + i];
+00749 | kernel_cpp_v810.cpp:573  |         }
+00750 | kernel_cpp_v810.cpp:574  | 
+00751 | kernel_cpp_v810.cpp:575  |     std::vector<double> C(K2 * K2, 0.0);
+00752 | kernel_cpp_v810.cpp:576  |     for (size_t i = 0; i < K2; ++i) {
+00753 | kernel_cpp_v810.cpp:577  |         for (size_t j = 0; j < K2; ++j) C[i * K2 + j] = -0.5 * tau * QtP[i * K2 + j];
+00754 | kernel_cpp_v810.cpp:578  |         C[i * K2 + i] += 1.0;
+00755 | kernel_cpp_v810.cpp:579  |     }
+00756 | kernel_cpp_v810.cpp:580  | 
+00757 | kernel_cpp_v810.cpp:581  |     std::vector<double> RHS(K2 * K, 0.0);
+00758 | kernel_cpp_v810.cpp:582  |     for (size_t i = 0; i < K; ++i)
+00759 | kernel_cpp_v810.cpp:583  |         for (size_t j = 0; j < K; ++j) {
+00760 | kernel_cpp_v810.cpp:584  |             RHS[i * K + j]       =  VtV[i * K + j];
+00761 | kernel_cpp_v810.cpp:585  |             RHS[(K + i) * K + j] = -VtZ[j * K + i];
+00762 | kernel_cpp_v810.cpp:586  |         }
+00763 | kernel_cpp_v810.cpp:587  | 
+00764 | kernel_cpp_v810.cpp:588  |     if (!solve_linear_system_general(C.data(), RHS.data(), K2, K)) {
+00765 | kernel_cpp_v810.cpp:589  |         #pragma omp parallel for schedule(static)
+00766 | kernel_cpp_v810.cpp:590  |         for (int64_t i = 0; i < (int64_t)(D * K); ++i) V[i] += tau * Z[i];
+00767 | kernel_cpp_v810.cpp:591  |         return apply_shifted_cholqr2(V, D, K, shift_regularization, num_threads);
+00768 | kernel_cpp_v810.cpp:592  |     }
+00769 | kernel_cpp_v810.cpp:593  | 
+00770 | kernel_cpp_v810.cpp:594  |     #pragma omp parallel for schedule(static)
+00771 | kernel_cpp_v810.cpp:595  |     for (int64_t d = 0; d < (int64_t)D; ++d) {
+00772 | kernel_cpp_v810.cpp:596  |         double upd[256];
+00773 | kernel_cpp_v810.cpp:597  |         double* row = upd;
+00774 | kernel_cpp_v810.cpp:598  |         std::vector<double> big;
+00775 | kernel_cpp_v810.cpp:599  |         if (K > 256) { big.resize(K); row = big.data(); }
+00776 | kernel_cpp_v810.cpp:600  |         for (size_t k = 0; k < K; ++k) {
+00777 | kernel_cpp_v810.cpp:601  |             double acc = 0.0;
+00778 | kernel_cpp_v810.cpp:602  |             for (size_t j = 0; j < K; ++j)
+00779 | kernel_cpp_v810.cpp:603  |                 acc += Z[d * K + j] * RHS[j * K + k] + V[d * K + j] * RHS[(K + j) * K + k];
+00780 | kernel_cpp_v810.cpp:604  |             row[k] = V[d * K + k] + 0.5 * tau * acc;
+00781 | kernel_cpp_v810.cpp:605  |         }
+00782 | kernel_cpp_v810.cpp:606  |         for (size_t k = 0; k < K; ++k) V[d * K + k] = row[k];
+00783 | kernel_cpp_v810.cpp:607  |     }
+00784 | kernel_cpp_v810.cpp:608  | 
+00785 | kernel_cpp_v810.cpp:609  |     polar_newton_refinement(V, D, K, num_threads, 1e-14);
+00786 | kernel_cpp_v810.cpp:610  |     return POLYDIM_STATUS_OK;
+00787 | kernel_cpp_v810.cpp:611  | }
+00788 | kernel_cpp_v810.cpp:612  | 
+00789 | kernel_cpp_v810.cpp:613  | /* ========================================================================= */
+00790 | kernel_cpp_v810.cpp:614  | /* 11. SOLVER STIEFEL (G1 firewall NaN; G2 convergencia condicionada;         */
+00791 | kernel_cpp_v810.cpp:615  | /*     CONVERGED_STEP habilitado)                                             */
+00792 | kernel_cpp_v810.cpp:616  | /* ========================================================================= */
+00793 | kernel_cpp_v810.cpp:617  | 
+00794 | kernel_cpp_v810.cpp:618  | POLYDIM_EXPORT int32_t polydim_stiefel_optimize(
+00795 | kernel_cpp_v810.cpp:619  |     const double* problem_data, size_t problem_size,
+00796 | kernel_cpp_v810.cpp:620  |     double* X, size_t D, size_t K,
+00797 | kernel_cpp_v810.cpp:621  |     const PolydimSolverOptions* options, PolydimSolverResult* result,
+00798 | kernel_cpp_v810.cpp:622  |     PolydimTelemetryBuffer* telemetry)
+00799 | kernel_cpp_v810.cpp:623  | {
+00800 | kernel_cpp_v810.cpp:624  |     if (!X || !options || !result) return POLYDIM_STATUS_ERR_NULL_PTR;
+00801 | kernel_cpp_v810.cpp:625  |     if (D == 0 || K == 0 || K > D) return POLYDIM_STATUS_ERR_INVALID_DIM;
+00802 | kernel_cpp_v810.cpp:626  | 
+00803 | kernel_cpp_v810.cpp:627  |     auto t_start = std::chrono::high_resolution_clock::now();
+00804 | kernel_cpp_v810.cpp:628  | 
+00805 | kernel_cpp_v810.cpp:629  |     uint64_t max_iters  = options->max_iterations  > 0 ? options->max_iterations  : 100;
+00806 | kernel_cpp_v810.cpp:630  |     double grad_tol     = options->gradient_tolerance > 0 ? options->gradient_tolerance : 1e-6;
+00807 | kernel_cpp_v810.cpp:631  |     double step_tol     = options->step_tolerance  > 0 ? options->step_tolerance  : 0.0;
+00808 | kernel_cpp_v810.cpp:632  |     double ortho_tol    = options->ortho_tolerance > 0 ? options->ortho_tolerance : 1e-5;
+00809 | kernel_cpp_v810.cpp:633  |     double lr           = options->learning_rate   > 0 ? options->learning_rate   : 1e-3;
+00810 | kernel_cpp_v810.cpp:634  |     uint32_t sample     = options->sampling_period > 0 ? options->sampling_period : 1;
+00811 | kernel_cpp_v810.cpp:635  |     uint32_t nthreads   = options->num_threads     > 0 ? options->num_threads     : 1;
+00812 | kernel_cpp_v810.cpp:636  | #if defined(_OPENMP)
+00813 | kernel_cpp_v810.cpp:637  |     omp_set_num_threads((int)nthreads);
+00814 | kernel_cpp_v810.cpp:638  | #endif
+00815 | kernel_cpp_v810.cpp:639  |     double shift_reg    = options->shift_regularization;
+00816 | kernel_cpp_v810.cpp:640  | 
+00817 | kernel_cpp_v810.cpp:641  |     /* Firewall de entrada: X inicial finito y, si hay target, target finito. */
+00818 | kernel_cpp_v810.cpp:642  |     for (size_t i = 0; i < D * K; ++i)
+00819 | kernel_cpp_v810.cpp:643  |         if (!std::isfinite(X[i])) return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+00820 | kernel_cpp_v810.cpp:644  |     if (problem_data)
+00821 | kernel_cpp_v810.cpp:645  |         for (size_t i = 0; i < problem_size && i < D * K; ++i)
+00822 | kernel_cpp_v810.cpp:646  |             if (!std::isfinite(problem_data[i])) return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+00823 | kernel_cpp_v810.cpp:647  | 
+00824 | kernel_cpp_v810.cpp:648  |     std::vector<double> G(D * K, 0.0), I_K(K * K, 0.0);
+00825 | kernel_cpp_v810.cpp:649  |     for (size_t i = 0; i < K; ++i) I_K[i * K + i] = 1.0;
+00826 | kernel_cpp_v810.cpp:650  | 
+00827 | kernel_cpp_v810.cpp:651  |     int32_t final_status = POLYDIM_STATUS_MAX_ITERATIONS;
+00828 | kernel_cpp_v810.cpp:652  |     uint64_t iter = 0;
+00829 | kernel_cpp_v810.cpp:653  |     double obj = 0.0, grad_norm = 0.0, ortho_err = 0.0;
+00830 | kernel_cpp_v810.cpp:654  |     bool manifold_ok = true;
+00831 | kernel_cpp_v810.cpp:655  | 
+00832 | kernel_cpp_v810.cpp:656  |     for (iter = 0; iter < max_iters; ++iter) {
+00833 | kernel_cpp_v810.cpp:657  |         obj = 0.0;
+00834 | kernel_cpp_v810.cpp:658  |         #pragma omp parallel for reduction(+:obj) schedule(static)
+00835 | kernel_cpp_v810.cpp:659  |         for (int64_t i = 0; i < (int64_t)(D * K); ++i) {
+00836 | kernel_cpp_v810.cpp:660  |             double target = (problem_data && (size_t)i < problem_size) ? problem_data[i] : 0.0;
+00837 | kernel_cpp_v810.cpp:661  |             double diff = X[i] - target;
+00838 | kernel_cpp_v810.cpp:662  |             G[i] = diff;
+00839 | kernel_cpp_v810.cpp:663  |             obj += 0.5 * diff * diff;
+00840 | kernel_cpp_v810.cpp:664  |         }
+00841 | kernel_cpp_v810.cpp:665  |         if (!std::isfinite(obj)) { final_status = POLYDIM_STATUS_ERR_NUMERICAL_NAN; break; }
+00842 | kernel_cpp_v810.cpp:666  | 
+00843 | kernel_cpp_v810.cpp:667  |         project_to_tangent_space(X, G.data(), D, K);
+00844 | kernel_cpp_v810.cpp:668  | 
+00845 | kernel_cpp_v810.cpp:669  |         grad_norm = 0.0;
+00846 | kernel_cpp_v810.cpp:670  |         #pragma omp parallel for reduction(+:grad_norm) schedule(static)
+00847 | kernel_cpp_v810.cpp:671  |         for (int64_t i = 0; i < (int64_t)(D * K); ++i) grad_norm += G[i] * G[i];
+00848 | kernel_cpp_v810.cpp:672  |         grad_norm = std::sqrt(grad_norm);
+00849 | kernel_cpp_v810.cpp:673  |         if (!std::isfinite(grad_norm)) { final_status = POLYDIM_STATUS_ERR_NUMERICAL_NAN; break; }
+00850 | kernel_cpp_v810.cpp:674  | 
+00851 | kernel_cpp_v810.cpp:675  |         if (grad_norm < grad_tol) { final_status = POLYDIM_STATUS_CONVERGED_GRADIENT; break; }
+00852 | kernel_cpp_v810.cpp:676  | 
+00853 | kernel_cpp_v810.cpp:677  |         /* CONVERGED_STEP: campo antes muerto, ahora operativo. */
+00854 | kernel_cpp_v810.cpp:678  |         if (step_tol > 0.0 && lr * grad_norm < step_tol) { final_status = POLYDIM_STATUS_CONVERGED_STEP; break; }
+00855 | kernel_cpp_v810.cpp:679  | 
+00856 | kernel_cpp_v810.cpp:680  |         int32_t ret_st;
+00857 | kernel_cpp_v810.cpp:681  |         if (options->retraction_type == POLYDIM_RETRACTION_CAYLEY_SMW) {
+00858 | kernel_cpp_v810.cpp:682  |             std::vector<double> Z(D * K);
+00859 | kernel_cpp_v810.cpp:683  |             #pragma omp parallel for schedule(static)
+00860 | kernel_cpp_v810.cpp:684  |             for (int64_t i = 0; i < (int64_t)(D * K); ++i) Z[i] = -G[i];
+00861 | kernel_cpp_v810.cpp:685  |             ret_st = retract_cayley_smw_mixed(X, Z.data(), D, K, lr, shift_reg, nthreads);
+00862 | kernel_cpp_v810.cpp:686  |         } else {
+00863 | kernel_cpp_v810.cpp:687  |             #pragma omp parallel for schedule(static)
+00864 | kernel_cpp_v810.cpp:688  |             for (int64_t i = 0; i < (int64_t)(D * K); ++i) X[i] -= lr * G[i];
+00865 | kernel_cpp_v810.cpp:689  |             ret_st = apply_shifted_cholqr2(X, D, K, shift_reg, nthreads);
+00866 | kernel_cpp_v810.cpp:690  |         }
+00867 | kernel_cpp_v810.cpp:691  |         if (ret_st != 0) { final_status = ret_st; break; }
+00868 | kernel_cpp_v810.cpp:692  | 
+00869 | kernel_cpp_v810.cpp:693  |         std::vector<double> Gram(K * K, 0.0);
+00870 | kernel_cpp_v810.cpp:694  |         polydim_gram_dsyrk(X, D, K, Gram.data(), nthreads);
+00871 | kernel_cpp_v810.cpp:695  |         ortho_err = frobenius_diff(Gram.data(), I_K.data(), K * K);
+00872 | kernel_cpp_v810.cpp:696  |         if (!std::isfinite(ortho_err)) { final_status = POLYDIM_STATUS_ERR_NUMERICAL_NAN; break; }
+00873 | kernel_cpp_v810.cpp:697  |         manifold_ok = (ortho_err <= ortho_tol);
+00874 | kernel_cpp_v810.cpp:698  |         if (!manifold_ok && iter > 5) { final_status = POLYDIM_STATUS_ERR_ORTHO_VIOLATION; break; }
+00875 | kernel_cpp_v810.cpp:699  | 
+00876 | kernel_cpp_v810.cpp:700  |         if (telemetry && telemetry->points && (iter % sample == 0)
+00877 | kernel_cpp_v810.cpp:701  |             && telemetry->recorded_count < telemetry->capacity) {
+00878 | kernel_cpp_v810.cpp:702  |             auto now = std::chrono::high_resolution_clock::now();
+00879 | kernel_cpp_v810.cpp:703  |             PolydimTelemetryPoint& pt = telemetry->points[telemetry->recorded_count++];
+00880 | kernel_cpp_v810.cpp:704  |             pt.iteration = iter; pt.objective_value = obj; pt.gradient_norm = grad_norm;
+00881 | kernel_cpp_v810.cpp:705  |             pt.step_size = lr; pt.ortho_error = ortho_err;
+00882 | kernel_cpp_v810.cpp:706  |             pt.elapsed_time_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(now - t_start).count();
+00883 | kernel_cpp_v810.cpp:707  |         }
+00884 | kernel_cpp_v810.cpp:708  |     }
+00885 | kernel_cpp_v810.cpp:709  | 
+00886 | kernel_cpp_v810.cpp:710  |     auto t_end = std::chrono::high_resolution_clock::now();
+00887 | kernel_cpp_v810.cpp:711  |     uint64_t total_ns = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
+00888 | kernel_cpp_v810.cpp:712  | 
+00889 | kernel_cpp_v810.cpp:713  |     std::vector<double> Gram_final(K * K, 0.0);
+00890 | kernel_cpp_v810.cpp:714  |     polydim_gram_dsyrk(X, D, K, Gram_final.data(), nthreads);
+00891 | kernel_cpp_v810.cpp:715  |     ortho_err = frobenius_diff(Gram_final.data(), I_K.data(), K * K);
+00892 | kernel_cpp_v810.cpp:716  |     if (!std::isfinite(ortho_err)) {
+00893 | kernel_cpp_v810.cpp:717  |         result->status = POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+00894 | kernel_cpp_v810.cpp:718  |         result->iterations_executed = iter; result->final_objective = obj;
+00895 | kernel_cpp_v810.cpp:719  |         result->final_grad_norm = grad_norm; result->final_ortho_error = ortho_err;
+00896 | kernel_cpp_v810.cpp:720  |         result->total_time_ns = total_ns;
+00897 | kernel_cpp_v810.cpp:721  |         std::snprintf(result->status_message, sizeof(result->status_message),
+00898 | kernel_cpp_v810.cpp:722  |                       "Error: non-finite orthogonality error (NaN/Inf firewall).");
+00899 | kernel_cpp_v810.cpp:723  |         return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+00900 | kernel_cpp_v810.cpp:724  |     }
+00901 | kernel_cpp_v810.cpp:725  |     manifold_ok = (ortho_err <= ortho_tol);
+00902 | kernel_cpp_v810.cpp:726  | 
+00903 | kernel_cpp_v810.cpp:727  |     /* G2: convergencia NUNCA se certifica fuera de la variedad. */
+00904 | kernel_cpp_v810.cpp:728  |     bool grad_converged = (final_status == POLYDIM_STATUS_CONVERGED_GRADIENT
+00905 | kernel_cpp_v810.cpp:729  |                         || final_status == POLYDIM_STATUS_CONVERGED_STEP);
+00906 | kernel_cpp_v810.cpp:730  |     if (grad_converged && !manifold_ok) {
+00907 | kernel_cpp_v810.cpp:731  |         /* Gradiente nulo con X degenerado (p.ej. X=0, target=0): es un punto
+00908 | kernel_cpp_v810.cpp:732  |          * estacionario EUCLIDEO fuera de Stiefel, no una solucion. */
+00909 | kernel_cpp_v810.cpp:733  |         final_status = (ortho_err > 1e-3) ? POLYDIM_STATUS_ERR_RANK_DEFICIENT
+00910 | kernel_cpp_v810.cpp:734  |                                           : POLYDIM_STATUS_ERR_ORTHO_VIOLATION;
+00911 | kernel_cpp_v810.cpp:735  |     }
+00912 | kernel_cpp_v810.cpp:736  | 
+00913 | kernel_cpp_v810.cpp:737  |     result->status = final_status;
+00914 | kernel_cpp_v810.cpp:738  |     result->iterations_executed = iter;
+00915 | kernel_cpp_v810.cpp:739  |     result->final_objective = obj;
+00916 | kernel_cpp_v810.cpp:740  |     result->final_grad_norm = grad_norm;
+00917 | kernel_cpp_v810.cpp:741  |     result->final_ortho_error = ortho_err;
+00918 | kernel_cpp_v810.cpp:742  |     result->total_time_ns = total_ns;
+00919 | kernel_cpp_v810.cpp:743  |     switch (final_status) {
+00920 | kernel_cpp_v810.cpp:744  |         case POLYDIM_STATUS_CONVERGED_GRADIENT:
+00921 | kernel_cpp_v810.cpp:745  |             std::snprintf(result->status_message, sizeof(result->status_message),
+00922 | kernel_cpp_v810.cpp:746  |                           "Converged: gradient norm below tolerance, on-manifold.");
+00923 | kernel_cpp_v810.cpp:747  |             break;
+00924 | kernel_cpp_v810.cpp:748  |         case POLYDIM_STATUS_CONVERGED_STEP:
+00925 | kernel_cpp_v810.cpp:749  |             std::snprintf(result->status_message, sizeof(result->status_message),
+00926 | kernel_cpp_v810.cpp:750  |                           "Converged: step size below tolerance, on-manifold.");
+00927 | kernel_cpp_v810.cpp:751  |             break;
+00928 | kernel_cpp_v810.cpp:752  |         case POLYDIM_STATUS_ERR_RANK_DEFICIENT:
+00929 | kernel_cpp_v810.cpp:753  |             std::snprintf(result->status_message, sizeof(result->status_message),
+00930 | kernel_cpp_v810.cpp:754  |                           "Error: rank-deficient iterate; not on Stiefel manifold.");
+00931 | kernel_cpp_v810.cpp:755  |             break;
+00932 | kernel_cpp_v810.cpp:756  |         case POLYDIM_STATUS_ERR_NUMERICAL_NAN:
+00933 | kernel_cpp_v810.cpp:757  |             std::snprintf(result->status_message, sizeof(result->status_message),
+00934 | kernel_cpp_v810.cpp:758  |                           "Error: NaN/Inf firewall triggered.");
+00935 | kernel_cpp_v810.cpp:759  |             break;
+00936 | kernel_cpp_v810.cpp:760  |         case POLYDIM_STATUS_MAX_ITERATIONS:
+00937 | kernel_cpp_v810.cpp:761  |             std::snprintf(result->status_message, sizeof(result->status_message),
+00938 | kernel_cpp_v810.cpp:762  |                           "Completed maximum iterations.");
+00939 | kernel_cpp_v810.cpp:763  |             break;
+00940 | kernel_cpp_v810.cpp:764  |         default:
+00941 | kernel_cpp_v810.cpp:765  |             std::snprintf(result->status_message, sizeof(result->status_message),
+00942 | kernel_cpp_v810.cpp:766  |                           "Optimization terminated with status code %d.", final_status);
+00943 | kernel_cpp_v810.cpp:767  |     }
+00944 | kernel_cpp_v810.cpp:768  |     return final_status;
+00945 | kernel_cpp_v810.cpp:769  | }
+00946 | kernel_cpp_v810.cpp:770  | 
+00947 | kernel_cpp_v810.cpp:771  | /* ========================================================================= */
+00948 | kernel_cpp_v810.cpp:772  | /* 12. RESERVORIO LSM (G9: permutaciones validadas + firewall)                */
+00949 | kernel_cpp_v810.cpp:773  | /* ========================================================================= */
+00950 | kernel_cpp_v810.cpp:774  | 
+00951 | kernel_cpp_v810.cpp:775  | static void fwht_normalized_inplace(double* x, size_t D) {
+00952 | kernel_cpp_v810.cpp:776  |     for (size_t len = 1; len < D; len <<= 1) {
+00953 | kernel_cpp_v810.cpp:777  |         #pragma omp parallel for schedule(static)
+00954 | kernel_cpp_v810.cpp:778  |         for (int64_t i = 0; i < (int64_t)D; i += (int64_t)(2 * len)) {
+00955 | kernel_cpp_v810.cpp:779  |             for (size_t j = 0; j < len; ++j) {
+00956 | kernel_cpp_v810.cpp:780  |                 double u = x[i + j], v = x[i + j + len];
+00957 | kernel_cpp_v810.cpp:781  |                 x[i + j] = u + v; x[i + j + len] = u - v;
+00958 | kernel_cpp_v810.cpp:782  |             }
+00959 | kernel_cpp_v810.cpp:783  |         }
+00960 | kernel_cpp_v810.cpp:784  |     }
+00961 | kernel_cpp_v810.cpp:785  |     double inv = 1.0 / std::sqrt((double)D);
+00962 | kernel_cpp_v810.cpp:786  |     #pragma omp parallel for simd schedule(static)
+00963 | kernel_cpp_v810.cpp:787  |     for (int64_t i = 0; i < (int64_t)D; ++i) x[i] *= inv;
+00964 | kernel_cpp_v810.cpp:788  | }
+00965 | kernel_cpp_v810.cpp:789  | 
+00966 | kernel_cpp_v810.cpp:790  | POLYDIM_EXPORT int32_t polydim_structured_lsm_step(
+00967 | kernel_cpp_v810.cpp:791  |     double* state, const double* input,
+00968 | kernel_cpp_v810.cpp:792  |     const int8_t* d1, const uint32_t* p1, const int8_t* d2, const uint32_t* p2,
+00969 | kernel_cpp_v810.cpp:793  |     size_t D, double alpha_leak, double input_scale)
+00970 | kernel_cpp_v810.cpp:794  | {
+00971 | kernel_cpp_v810.cpp:795  |     if (!state || !d1 || !p1 || !d2 || !p2) return POLYDIM_STATUS_ERR_NULL_PTR;
+00972 | kernel_cpp_v810.cpp:796  |     if (D == 0 || (D & (D - 1)) != 0) return POLYDIM_STATUS_ERR_INVALID_DIM;
+00973 | kernel_cpp_v810.cpp:797  | 
+00974 | kernel_cpp_v810.cpp:798  |     /* G9: un indice de permutacion corrupto es un OOB read silencioso. */
+00975 | kernel_cpp_v810.cpp:799  |     for (size_t i = 0; i < D; ++i)
+00976 | kernel_cpp_v810.cpp:800  |         if (p1[i] >= D || p2[i] >= D) return POLYDIM_STATUS_ERR_INVALID_DIM;
+00977 | kernel_cpp_v810.cpp:801  | 
+00978 | kernel_cpp_v810.cpp:802  |     std::vector<double> tmp(D, 0.0);
+00979 | kernel_cpp_v810.cpp:803  |     #pragma omp parallel for schedule(static)
+00980 | kernel_cpp_v810.cpp:804  |     for (int64_t i = 0; i < (int64_t)D; ++i)
+00981 | kernel_cpp_v810.cpp:805  |         tmp[i] = state[p1[i]] * (d1[p1[i]] < 0 ? -1.0 : 1.0);
+00982 | kernel_cpp_v810.cpp:806  | 
+00983 | kernel_cpp_v810.cpp:807  |     fwht_normalized_inplace(tmp.data(), D);
+00984 | kernel_cpp_v810.cpp:808  | 
+00985 | kernel_cpp_v810.cpp:809  |     double alpha = (alpha_leak > 0.0 && alpha_leak <= 1.0) ? alpha_leak : 0.8;
+00986 | kernel_cpp_v810.cpp:810  |     double in_scale = (input_scale != 0.0) ? input_scale : 1.0;
+00987 | kernel_cpp_v810.cpp:811  | 
+00988 | kernel_cpp_v810.cpp:812  |     #pragma omp parallel for schedule(static)
+00989 | kernel_cpp_v810.cpp:813  |     for (int64_t i = 0; i < (int64_t)D; ++i) {
+00990 | kernel_cpp_v810.cpp:814  |         double w = tmp[p2[i]] * (d2[i] < 0 ? -1.0 : 1.0);
+00991 | kernel_cpp_v810.cpp:815  |         double in_val = (input != nullptr) ? in_scale * input[i] : 0.0;
+00992 | kernel_cpp_v810.cpp:816  |         state[i] = (1.0 - alpha) * state[i] + alpha * std::tanh(w + in_val);
+00993 | kernel_cpp_v810.cpp:817  |     }
+00994 | kernel_cpp_v810.cpp:818  | 
+00995 | kernel_cpp_v810.cpp:819  |     /* Firewall: un NaN en el estado se propaga por tanh para siempre. */
+00996 | kernel_cpp_v810.cpp:820  |     for (size_t i = 0; i < D; ++i)
+00997 | kernel_cpp_v810.cpp:821  |         if (!std::isfinite(state[i])) return POLYDIM_STATUS_ERR_NUMERICAL_NAN;
+00998 | kernel_cpp_v810.cpp:822  |     return POLYDIM_STATUS_OK;
+00999 | kernel_cpp_v810.cpp:823  | }
+
+
+/* ############################################################################ */
+/* FILE: pmtp_rcu_v810.cpp */
+/* ############################################################################ */
+
+01000 | pmtp_rcu_v810.cpp:1    | /* ========================================================= */
+01001 | pmtp_rcu_v810.cpp:2    | /* FILE: pmtp_rcu_v810.cpp                                   */
+01002 | pmtp_rcu_v810.cpp:3    | /* Banked RCU de 3 Épocas para POLYDIM V810                  */
+01003 | pmtp_rcu_v810.cpp:4    | /* Correcciones integradas:                                  */
+01004 | pmtp_rcu_v810.cpp:5    | /*  1. Atomicidad de Writer Lock: CAS 64-bit sobre           */
+01005 | pmtp_rcu_v810.cpp:6    | /*     {writer_active, owner_pid} simultáneamente. Elimina  */
+01006 | pmtp_rcu_v810.cpp:7    | /*     cualquier ventana de robo de lock / owner_pid=0.      */
+01007 | pmtp_rcu_v810.cpp:8    | /*  2. Detección de procesos zombi / PID recycling con       */
+01008 | pmtp_rcu_v810.cpp:9    | /*     GetProcessTimes y GetExitCodeProcess en Windows.      */
+01009 | pmtp_rcu_v810.cpp:10   | /*  3. Inicialización sin UB: recorrido volátil de bytes con */
+01010 | pmtp_rcu_v810.cpp:11   | /*     barrera de release.                                   */
+01011 | pmtp_rcu_v810.cpp:12   | /*  4. Lectores leen active_bank con validación anti-stale   */
+01012 | pmtp_rcu_v810.cpp:13   | /*     y ciclo de drenado con deadline real.                 */
+01013 | pmtp_rcu_v810.cpp:14   | /* ========================================================= */
+01014 | pmtp_rcu_v810.cpp:15   | 
+01015 | pmtp_rcu_v810.cpp:16   | #include "polydim_solver_abi_v808_1.h"
+01016 | pmtp_rcu_v810.cpp:17   | #include <atomic>
+01017 | pmtp_rcu_v810.cpp:18   | #include <chrono>
+01018 | pmtp_rcu_v810.cpp:19   | #include <cstring>
+01019 | pmtp_rcu_v810.cpp:20   | #include <thread>
+01020 | pmtp_rcu_v810.cpp:21   | 
+01021 | pmtp_rcu_v810.cpp:22   | #if defined(_WIN32)
+01022 | pmtp_rcu_v810.cpp:23   |   #define POLYDIM_EXPORT extern "C" __declspec(dllexport)
+01023 | pmtp_rcu_v810.cpp:24   |   #include <windows.h>
+01024 | pmtp_rcu_v810.cpp:25   | #else
+01025 | pmtp_rcu_v810.cpp:26   |   #define POLYDIM_EXPORT extern "C" __attribute__((visibility("default")))
+01026 | pmtp_rcu_v810.cpp:27   |   #include <signal.h>
+01027 | pmtp_rcu_v810.cpp:28   |   #include <sys/types.h>
+01028 | pmtp_rcu_v810.cpp:29   |   #include <errno.h>
+01029 | pmtp_rcu_v810.cpp:30   |   #include <unistd.h>
+01030 | pmtp_rcu_v810.cpp:31   | #endif
+01031 | pmtp_rcu_v810.cpp:32   | 
+01032 | pmtp_rcu_v810.cpp:33   | #define PMTP_DRAIN_POLL_MIN_NS        (50ull * 1000ull)          /* 50 us */
+01033 | pmtp_rcu_v810.cpp:34   | #define PMTP_DRAIN_POLL_MAX_NS        (1ull   * 1000ull * 1000ull) /* 1 ms */
+01034 | pmtp_rcu_v810.cpp:35   | 
+01035 | pmtp_rcu_v810.cpp:36   | static inline uint64_t pmtp_now_ns() {
+01036 | pmtp_rcu_v810.cpp:37   |     return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+01037 | pmtp_rcu_v810.cpp:38   |         std::chrono::steady_clock::now().time_since_epoch()).count();
+01038 | pmtp_rcu_v810.cpp:39   | }
+01039 | pmtp_rcu_v810.cpp:40   | 
+01040 | pmtp_rcu_v810.cpp:41   | /* Inicialización del slot compartido (llamar una vez, antes de publicar) */
+01041 | pmtp_rcu_v810.cpp:42   | POLYDIM_EXPORT void pmtp_banked_slot_init(PmtpBankedSlotHeader* header) {
+01042 | pmtp_rcu_v810.cpp:43   |     if (!header) return;
+01043 | pmtp_rcu_v810.cpp:44   |     volatile uint8_t* p = reinterpret_cast<volatile uint8_t*>(header);
+01044 | pmtp_rcu_v810.cpp:45   |     for (size_t i = 0; i < sizeof(*header); ++i) p[i] = 0;
+01045 | pmtp_rcu_v810.cpp:46   |     std::atomic_thread_fence(std::memory_order_release);
+01046 | pmtp_rcu_v810.cpp:47   | 
+01047 | pmtp_rcu_v810.cpp:48   |     /* active_bank = 0, prev_bank = 2  ->  el primer write_bank sera 1 */
+01048 | pmtp_rcu_v810.cpp:49   |     reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank)
+01049 | pmtp_rcu_v810.cpp:50   |         ->store(0, std::memory_order_relaxed);
+01050 | pmtp_rcu_v810.cpp:51   |     reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank)
+01051 | pmtp_rcu_v810.cpp:52   |         ->store(PMTP_NUM_RCU_SLOTS - 1, std::memory_order_relaxed);
+01052 | pmtp_rcu_v810.cpp:53   |     std::atomic_thread_fence(std::memory_order_release);
+01053 | pmtp_rcu_v810.cpp:54   | }
+01054 | pmtp_rcu_v810.cpp:55   | 
+01055 | pmtp_rcu_v810.cpp:56   | static int pmtp_is_process_alive(uint32_t pid) {
+01056 | pmtp_rcu_v810.cpp:57   |     if (pid == 0) return 0;
+01057 | pmtp_rcu_v810.cpp:58   | #if defined(_WIN32)
+01058 | pmtp_rcu_v810.cpp:59   |     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+01059 | pmtp_rcu_v810.cpp:60   |     if (h == NULL) {
+01060 | pmtp_rcu_v810.cpp:61   |         DWORD err = GetLastError();
+01061 | pmtp_rcu_v810.cpp:62   |         return (err == ERROR_ACCESS_DENIED) ? 1 : 0;
+01062 | pmtp_rcu_v810.cpp:63   |     }
+01063 | pmtp_rcu_v810.cpp:64   |     DWORD exit_code = 0;
+01064 | pmtp_rcu_v810.cpp:65   |     int alive = 0;
+01065 | pmtp_rcu_v810.cpp:66   |     if (GetExitCodeProcess(h, &exit_code)) {
+01066 | pmtp_rcu_v810.cpp:67   |         alive = (exit_code == STILL_ACTIVE) ? 1 : 0;
+01067 | pmtp_rcu_v810.cpp:68   |     }
+01068 | pmtp_rcu_v810.cpp:69   |     CloseHandle(h);
+01069 | pmtp_rcu_v810.cpp:70   |     return alive;
+01070 | pmtp_rcu_v810.cpp:71   | #else
+01071 | pmtp_rcu_v810.cpp:72   |     int res = kill((pid_t)pid, 0);
+01072 | pmtp_rcu_v810.cpp:73   |     if (res == 0)  return 1;
+01073 | pmtp_rcu_v810.cpp:74   |     if (errno == EPERM) return 1;
+01074 | pmtp_rcu_v810.cpp:75   |     return 0;
+01075 | pmtp_rcu_v810.cpp:76   | #endif
+01076 | pmtp_rcu_v810.cpp:77   | }
+01077 | pmtp_rcu_v810.cpp:78   | 
+01078 | pmtp_rcu_v810.cpp:79   | static PmtpReaderLease* pmtp_get_bank(PmtpBankedSlotHeader* h, uint32_t b) {
+01079 | pmtp_rcu_v810.cpp:80   |     if (!h) return nullptr;
+01080 | pmtp_rcu_v810.cpp:81   |     switch (b % PMTP_NUM_RCU_SLOTS) {
+01081 | pmtp_rcu_v810.cpp:82   |         case 0:  return h->leases_bank0;
+01082 | pmtp_rcu_v810.cpp:83   |         case 1:  return h->leases_bank1;
+01083 | pmtp_rcu_v810.cpp:84   |         case 2:  return h->leases_bank2;
+01084 | pmtp_rcu_v810.cpp:85   |         default: return nullptr;
+01085 | pmtp_rcu_v810.cpp:86   |     }
+01086 | pmtp_rcu_v810.cpp:87   | }
+01087 | pmtp_rcu_v810.cpp:88   | 
+01088 | pmtp_rcu_v810.cpp:89   | /* Reap de leases de procesos muertos. timeout_ns es el deadline acumulado */
+01089 | pmtp_rcu_v810.cpp:90   | POLYDIM_EXPORT int32_t pmtp_reap_orphaned_leases(
+01090 | pmtp_rcu_v810.cpp:91   |     PmtpBankedSlotHeader* header, uint32_t target_bank,
+01091 | pmtp_rcu_v810.cpp:92   |     uint64_t timeout_ns, uint32_t* num_reclaimed)
+01092 | pmtp_rcu_v810.cpp:93   | {
+01093 | pmtp_rcu_v810.cpp:94   |     if (!header || !num_reclaimed) return POLYDIM_STATUS_ERR_NULL_PTR;
+01094 | pmtp_rcu_v810.cpp:95   |     *num_reclaimed = 0;
+01095 | pmtp_rcu_v810.cpp:96   |     const uint64_t deadline = pmtp_now_ns() + timeout_ns;
+01096 | pmtp_rcu_v810.cpp:97   |     PmtpReaderLease* leases = pmtp_get_bank(header, target_bank);
+01097 | pmtp_rcu_v810.cpp:98   |     if (!leases) return POLYDIM_STATUS_ERR_INVALID_DIM;
+01098 | pmtp_rcu_v810.cpp:99   | 
+01099 | pmtp_rcu_v810.cpp:100  |     for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+01100 | pmtp_rcu_v810.cpp:101  |         if (pmtp_now_ns() > deadline) break;               /* deadline real */
+01101 | pmtp_rcu_v810.cpp:102  |         std::atomic<uint32_t>* st =
+01102 | pmtp_rcu_v810.cpp:103  |             reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state);
+01103 | pmtp_rcu_v810.cpp:104  |         if (st->load(std::memory_order_acquire) != PMTP_LEASE_ACTIVE) continue;
+01104 | pmtp_rcu_v810.cpp:105  |         
+01105 | pmtp_rcu_v810.cpp:106  |         uint32_t reader_pid = leases[i].pid;
+01106 | pmtp_rcu_v810.cpp:107  |         if (!pmtp_is_process_alive(reader_pid)) {
+01107 | pmtp_rcu_v810.cpp:108  |             // Re-chequeo atómico antes de reclamar
+01108 | pmtp_rcu_v810.cpp:109  |             uint32_t expected = PMTP_LEASE_ACTIVE;
+01109 | pmtp_rcu_v810.cpp:110  |             if (st->compare_exchange_strong(expected, PMTP_LEASE_RECLAIMED,
+01110 | pmtp_rcu_v810.cpp:111  |                                             std::memory_order_acq_rel)) {
+01111 | pmtp_rcu_v810.cpp:112  |                 (*num_reclaimed)++;
+01112 | pmtp_rcu_v810.cpp:113  |                 reinterpret_cast<std::atomic<uint32_t>*>(&header->num_reclaimed_orphans)
+01113 | pmtp_rcu_v810.cpp:114  |                     ->fetch_add(1, std::memory_order_relaxed);
+01114 | pmtp_rcu_v810.cpp:115  |             }
+01115 | pmtp_rcu_v810.cpp:116  |         }
+01116 | pmtp_rcu_v810.cpp:117  |     }
+01117 | pmtp_rcu_v810.cpp:118  |     return POLYDIM_STATUS_OK;
+01118 | pmtp_rcu_v810.cpp:119  | }
+01119 | pmtp_rcu_v810.cpp:120  | 
+01120 | pmtp_rcu_v810.cpp:121  | /* LECTOR: lee el banco PUBLICADO. La única fuente de verdad es active_bank. */
+01121 | pmtp_rcu_v810.cpp:122  | POLYDIM_EXPORT int32_t pmtp_banked_slot_acquire_reader(
+01122 | pmtp_rcu_v810.cpp:123  |     PmtpBankedSlotHeader* header, uint32_t* acquired_bank,
+01123 | pmtp_rcu_v810.cpp:124  |     uint32_t* acquired_slot_idx, uint32_t pid, uint64_t start_time_ns)
+01124 | pmtp_rcu_v810.cpp:125  | {
+01125 | pmtp_rcu_v810.cpp:126  |     if (!header || !acquired_bank || !acquired_slot_idx)
+01126 | pmtp_rcu_v810.cpp:127  |         return POLYDIM_STATUS_ERR_NULL_PTR;
+01127 | pmtp_rcu_v810.cpp:128  | 
+01128 | pmtp_rcu_v810.cpp:129  |     std::atomic<uint32_t>* g_epoch =
+01129 | pmtp_rcu_v810.cpp:130  |         reinterpret_cast<std::atomic<uint32_t>*>(&header->global_epoch);
+01130 | pmtp_rcu_v810.cpp:131  |     std::atomic<uint32_t>* g_active =
+01131 | pmtp_rcu_v810.cpp:132  |         reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank);
+01132 | pmtp_rcu_v810.cpp:133  |     std::atomic<uint64_t>* g_seq =
+01133 | pmtp_rcu_v810.cpp:134  |         reinterpret_cast<std::atomic<uint64_t>*>(&header->sequence);
+01134 | pmtp_rcu_v810.cpp:135  | 
+01135 | pmtp_rcu_v810.cpp:136  |     for (int attempt = 0; attempt < 16; ++attempt) {
+01136 | pmtp_rcu_v810.cpp:137  |         const uint32_t bank = g_active->load(std::memory_order_acquire);
+01137 | pmtp_rcu_v810.cpp:138  |         PmtpReaderLease* leases = pmtp_get_bank(header, bank);
+01138 | pmtp_rcu_v810.cpp:139  |         if (!leases) return POLYDIM_STATUS_ERR_INVALID_DIM;
+01139 | pmtp_rcu_v810.cpp:140  | 
+01140 | pmtp_rcu_v810.cpp:141  |         for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+01141 | pmtp_rcu_v810.cpp:142  |             std::atomic<uint32_t>* st =
+01142 | pmtp_rcu_v810.cpp:143  |                 reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state);
+01143 | pmtp_rcu_v810.cpp:144  |             uint32_t cur = st->load(std::memory_order_relaxed);
+01144 | pmtp_rcu_v810.cpp:145  |             if (cur == PMTP_LEASE_ACTIVE) continue;
+01145 | pmtp_rcu_v810.cpp:146  |             uint32_t expected = cur; /* FREE | CLOSED | RECLAIMED */
+01146 | pmtp_rcu_v810.cpp:147  |             if (st->compare_exchange_strong(expected, PMTP_LEASE_ACTIVE,
+01147 | pmtp_rcu_v810.cpp:148  |                                             std::memory_order_acq_rel)) {
+01148 | pmtp_rcu_v810.cpp:149  |                 leases[i].pid                   = pid;
+01149 | pmtp_rcu_v810.cpp:150  |                 leases[i].process_start_time_ns = start_time_ns;
+01150 | pmtp_rcu_v810.cpp:151  |                 leases[i].epoch                 = g_epoch->load(std::memory_order_acquire);
+01151 | pmtp_rcu_v810.cpp:152  |                 leases[i].generation            = g_seq->load(std::memory_order_acquire);
+01152 | pmtp_rcu_v810.cpp:153  |                 *acquired_bank                  = bank;
+01153 | pmtp_rcu_v810.cpp:154  |                 *acquired_slot_idx              = (uint32_t)i;
+01154 | pmtp_rcu_v810.cpp:155  |                 std::atomic_thread_fence(std::memory_order_release);
+01155 | pmtp_rcu_v810.cpp:156  | 
+01156 | pmtp_rcu_v810.cpp:157  |                 /* Anti-torn-stale: si el publicador rotó justo tras nuestro CAS,
+01157 | pmtp_rcu_v810.cpp:158  |                  * lo detectamos y reintentamos con el nuevo banco publicado. */
+01158 | pmtp_rcu_v810.cpp:159  |                 if (g_active->load(std::memory_order_acquire) != bank) {
+01159 | pmtp_rcu_v810.cpp:160  |                     st->store(PMTP_LEASE_CLOSED, std::memory_order_release);
+01160 | pmtp_rcu_v810.cpp:161  |                     break;
+01161 | pmtp_rcu_v810.cpp:162  |                 }
+01162 | pmtp_rcu_v810.cpp:163  |                 return POLYDIM_STATUS_OK;
+01163 | pmtp_rcu_v810.cpp:164  |             }
+01164 | pmtp_rcu_v810.cpp:165  |         }
+01165 | pmtp_rcu_v810.cpp:166  |         std::this_thread::yield();
+01166 | pmtp_rcu_v810.cpp:167  |     }
+01167 | pmtp_rcu_v810.cpp:168  |     return POLYDIM_STATUS_ERR_NO_FREE_SLOT;
+01168 | pmtp_rcu_v810.cpp:169  | }
+01169 | pmtp_rcu_v810.cpp:170  | 
+01170 | pmtp_rcu_v810.cpp:171  | POLYDIM_EXPORT int32_t pmtp_banked_slot_release_reader(
+01171 | pmtp_rcu_v810.cpp:172  |     PmtpBankedSlotHeader* header, uint32_t bank, uint32_t slot_idx)
+01172 | pmtp_rcu_v810.cpp:173  | {
+01173 | pmtp_rcu_v810.cpp:174  |     if (!header || slot_idx >= PMTP_MAX_READERS_PER_BANK)
+01174 | pmtp_rcu_v810.cpp:175  |         return POLYDIM_STATUS_ERR_NULL_PTR;
+01175 | pmtp_rcu_v810.cpp:176  |     PmtpReaderLease* leases = pmtp_get_bank(header, bank);
+01176 | pmtp_rcu_v810.cpp:177  |     if (!leases) return POLYDIM_STATUS_ERR_INVALID_DIM;
+01177 | pmtp_rcu_v810.cpp:178  | 
+01178 | pmtp_rcu_v810.cpp:179  |     reinterpret_cast<std::atomic<uint32_t>*>(&leases[slot_idx].state)
+01179 | pmtp_rcu_v810.cpp:180  |         ->store(PMTP_LEASE_CLOSED, std::memory_order_release);
+01180 | pmtp_rcu_v810.cpp:181  |     return POLYDIM_STATUS_OK;
+01181 | pmtp_rcu_v810.cpp:182  | }
+01182 | pmtp_rcu_v810.cpp:183  | 
+01183 | pmtp_rcu_v810.cpp:184  | /* Intenta reclamar el mutex de escritor.
+01184 | pmtp_rcu_v810.cpp:185  |  * SOTA Fix: CAS 64-bit atómico sobre {writer_active, owner_pid} empaquetados.
+01185 | pmtp_rcu_v810.cpp:186  |  * Offset 8 es 8-byte aligned, por lo que bits 0..31 = writer_active, bits 32..63 = owner_pid.
+01186 | pmtp_rcu_v810.cpp:187  |  */
+01187 | pmtp_rcu_v810.cpp:188  | static int32_t pmtp_writer_lock(PmtpBankedSlotHeader* header,
+01188 | pmtp_rcu_v810.cpp:189  |                                 uint32_t pid, uint64_t start_time_ns)
+01189 | pmtp_rcu_v810.cpp:190  | {
+01190 | pmtp_rcu_v810.cpp:191  |     std::atomic<uint64_t>* w_slot =
+01191 | pmtp_rcu_v810.cpp:192  |         reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active);
+01192 | pmtp_rcu_v810.cpp:193  |     uint64_t expected = 0;
+01193 | pmtp_rcu_v810.cpp:194  |     uint64_t desired = ((uint64_t)pid << 32) | 1ull;
+01194 | pmtp_rcu_v810.cpp:195  | 
+01195 | pmtp_rcu_v810.cpp:196  |     if (w_slot->compare_exchange_strong(expected, desired, std::memory_order_acq_rel))
+01196 | pmtp_rcu_v810.cpp:197  |         goto owned;
+01197 | pmtp_rcu_v810.cpp:198  | 
+01198 | pmtp_rcu_v810.cpp:199  |     /* Writer ocupado: verificar si el proceso está muerto */
+01199 | pmtp_rcu_v810.cpp:200  |     {
+01200 | pmtp_rcu_v810.cpp:201  |         uint32_t opid = (uint32_t)(expected >> 32);
+01201 | pmtp_rcu_v810.cpp:202  |         uint64_t ostart = header->owner_start_time_ns;
+01202 | pmtp_rcu_v810.cpp:203  |         int dead = (opid != 0) && !pmtp_is_process_alive(opid);
+01203 | pmtp_rcu_v810.cpp:204  | 
+01204 | pmtp_rcu_v810.cpp:205  |         if (dead) {
+01205 | pmtp_rcu_v810.cpp:206  |             if (ostart == header->owner_start_time_ns) {
+01206 | pmtp_rcu_v810.cpp:207  |                 // Reclamar atómicamente el slot del escritor muerto
+01207 | pmtp_rcu_v810.cpp:208  |                 if (w_slot->compare_exchange_strong(expected, desired, std::memory_order_acq_rel))
+01208 | pmtp_rcu_v810.cpp:209  |                     goto owned;
+01209 | pmtp_rcu_v810.cpp:210  |             }
+01210 | pmtp_rcu_v810.cpp:211  |         }
+01211 | pmtp_rcu_v810.cpp:212  |     }
+01212 | pmtp_rcu_v810.cpp:213  |     return POLYDIM_STATUS_ERR_WRITER_BUSY;
+01213 | pmtp_rcu_v810.cpp:214  | 
+01214 | pmtp_rcu_v810.cpp:215  | owned:
+01215 | pmtp_rcu_v810.cpp:216  |     reinterpret_cast<std::atomic<uint64_t>*>(&header->owner_start_time_ns)
+01216 | pmtp_rcu_v810.cpp:217  |         ->store(start_time_ns, std::memory_order_release);
+01217 | pmtp_rcu_v810.cpp:218  |     reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_heartbeat_ns)
+01218 | pmtp_rcu_v810.cpp:219  |         ->store(pmtp_now_ns(), std::memory_order_release);
+01219 | pmtp_rcu_v810.cpp:220  |     std::atomic_thread_fence(std::memory_order_seq_cst);
+01220 | pmtp_rcu_v810.cpp:221  |     return POLYDIM_STATUS_OK;
+01221 | pmtp_rcu_v810.cpp:222  | }
+01222 | pmtp_rcu_v810.cpp:223  | 
+01223 | pmtp_rcu_v810.cpp:224  | POLYDIM_EXPORT int32_t pmtp_banked_slot_acquire_writer(
+01224 | pmtp_rcu_v810.cpp:225  |     PmtpBankedSlotHeader* header, uint32_t* write_bank,
+01225 | pmtp_rcu_v810.cpp:226  |     uint32_t pid, uint64_t start_time_ns)
+01226 | pmtp_rcu_v810.cpp:227  | {
+01227 | pmtp_rcu_v810.cpp:228  |     if (!header || !write_bank) return POLYDIM_STATUS_ERR_NULL_PTR;
+01228 | pmtp_rcu_v810.cpp:229  | 
+01229 | pmtp_rcu_v810.cpp:230  |     int32_t lk = pmtp_writer_lock(header, pid, start_time_ns);
+01230 | pmtp_rcu_v810.cpp:231  |     if (lk != POLYDIM_STATUS_OK) return lk;
+01231 | pmtp_rcu_v810.cpp:232  | 
+01232 | pmtp_rcu_v810.cpp:233  |     std::atomic<uint32_t>* g_active =
+01233 | pmtp_rcu_v810.cpp:234  |         reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank);
+01234 | pmtp_rcu_v810.cpp:235  |     std::atomic<uint32_t>* g_prev =
+01235 | pmtp_rcu_v810.cpp:236  |         reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank);
+01236 | pmtp_rcu_v810.cpp:237  |     std::atomic<uint64_t>* hb =
+01237 | pmtp_rcu_v810.cpp:238  |         reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_heartbeat_ns);
+01238 | pmtp_rcu_v810.cpp:239  | 
+01239 | pmtp_rcu_v810.cpp:240  |     /* Banco a escribir: el UNICO que no está en uso */
+01240 | pmtp_rcu_v810.cpp:241  |     const uint32_t cur = g_active->load(std::memory_order_acquire);
+01241 | pmtp_rcu_v810.cpp:242  |     const uint32_t prv = g_prev->load(std::memory_order_acquire);
+01242 | pmtp_rcu_v810.cpp:243  |     uint32_t wbank = (PMTP_NUM_RCU_SLOTS * 2 - cur - prv) % PMTP_NUM_RCU_SLOTS;
+01243 | pmtp_rcu_v810.cpp:244  |     if (wbank == cur || wbank == prv) {
+01244 | pmtp_rcu_v810.cpp:245  |         reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+01245 | pmtp_rcu_v810.cpp:246  |             ->store(0, std::memory_order_release);
+01246 | pmtp_rcu_v810.cpp:247  |         return POLYDIM_STATUS_ERR_ABI_MISMATCH;
+01247 | pmtp_rcu_v810.cpp:248  |     }
+01248 | pmtp_rcu_v810.cpp:249  | 
+01249 | pmtp_rcu_v810.cpp:250  |     /* Drain con deadline real: nunca escribimos sobre un lector vivo */
+01250 | pmtp_rcu_v810.cpp:251  |     {
+01251 | pmtp_rcu_v810.cpp:252  |         const uint64_t deadline = pmtp_now_ns() + PMTP_DRAIN_POLL_MAX_NS * 1000; /* ~1 s */
+01252 | pmtp_rcu_v810.cpp:253  |         uint64_t backoff = PMTP_DRAIN_POLL_MIN_NS;
+01253 | pmtp_rcu_v810.cpp:254  |         for (;;) {
+01254 | pmtp_rcu_v810.cpp:255  |             hb->store(pmtp_now_ns(), std::memory_order_release);
+01255 | pmtp_rcu_v810.cpp:256  |             bool busy = false;
+01256 | pmtp_rcu_v810.cpp:257  |             PmtpReaderLease* leases = pmtp_get_bank(header, wbank);
+01257 | pmtp_rcu_v810.cpp:258  |             if (!leases) {
+01258 | pmtp_rcu_v810.cpp:259  |                 reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+01259 | pmtp_rcu_v810.cpp:260  |                     ->store(0, std::memory_order_release);
+01260 | pmtp_rcu_v810.cpp:261  |                 return POLYDIM_STATUS_ERR_INVALID_DIM;
+01261 | pmtp_rcu_v810.cpp:262  |             }
+01262 | pmtp_rcu_v810.cpp:263  |             for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+01263 | pmtp_rcu_v810.cpp:264  |                 if (reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state)
+01264 | pmtp_rcu_v810.cpp:265  |                         ->load(std::memory_order_acquire) == PMTP_LEASE_ACTIVE) {
+01265 | pmtp_rcu_v810.cpp:266  |                     busy = true;
+01266 | pmtp_rcu_v810.cpp:267  |                     break;
+01267 | pmtp_rcu_v810.cpp:268  |                 }
+01268 | pmtp_rcu_v810.cpp:269  |             }
+01269 | pmtp_rcu_v810.cpp:270  |             if (!busy) break;
+01270 | pmtp_rcu_v810.cpp:271  |             uint32_t n = 0;
+01271 | pmtp_rcu_v810.cpp:272  |             pmtp_reap_orphaned_leases(header, wbank, backoff, &n);
+01272 | pmtp_rcu_v810.cpp:273  |             if (pmtp_now_ns() > deadline) {
+01273 | pmtp_rcu_v810.cpp:274  |                 reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+01274 | pmtp_rcu_v810.cpp:275  |                     ->store(0, std::memory_order_release);
+01275 | pmtp_rcu_v810.cpp:276  |                 return POLYDIM_STATUS_ERR_DRAIN_TIMEOUT;
+01276 | pmtp_rcu_v810.cpp:277  |             }
+01277 | pmtp_rcu_v810.cpp:278  |             std::this_thread::sleep_for(std::chrono::nanoseconds(backoff));
+01278 | pmtp_rcu_v810.cpp:279  |             backoff = (backoff * 2 > PMTP_DRAIN_POLL_MAX_NS)
+01279 | pmtp_rcu_v810.cpp:280  |                       ? PMTP_DRAIN_POLL_MAX_NS : backoff * 2;
+01280 | pmtp_rcu_v810.cpp:281  |         }
+01281 | pmtp_rcu_v810.cpp:282  | 
+01282 | pmtp_rcu_v810.cpp:283  |         /* Reciclar leases cerrados/reclamados a FREE */
+01283 | pmtp_rcu_v810.cpp:284  |         PmtpReaderLease* leases = pmtp_get_bank(header, wbank);
+01284 | pmtp_rcu_v810.cpp:285  |         for (size_t i = 0; i < PMTP_MAX_READERS_PER_BANK; ++i) {
+01285 | pmtp_rcu_v810.cpp:286  |             std::atomic<uint32_t>* st =
+01286 | pmtp_rcu_v810.cpp:287  |                 reinterpret_cast<std::atomic<uint32_t>*>(&leases[i].state);
+01287 | pmtp_rcu_v810.cpp:288  |             uint32_t cur_state = st->load(std::memory_order_relaxed);
+01288 | pmtp_rcu_v810.cpp:289  |             if (cur_state != PMTP_LEASE_FREE) {
+01289 | pmtp_rcu_v810.cpp:290  |                 uint32_t expected = cur_state;
+01290 | pmtp_rcu_v810.cpp:291  |                 st->compare_exchange_strong(expected, PMTP_LEASE_FREE,
+01291 | pmtp_rcu_v810.cpp:292  |                                             std::memory_order_acq_rel);
+01292 | pmtp_rcu_v810.cpp:293  |             }
+01293 | pmtp_rcu_v810.cpp:294  |         }
+01294 | pmtp_rcu_v810.cpp:295  |     }
+01295 | pmtp_rcu_v810.cpp:296  | 
+01296 | pmtp_rcu_v810.cpp:297  |     *write_bank = wbank;
+01297 | pmtp_rcu_v810.cpp:298  |     return POLYDIM_STATUS_OK;
+01298 | pmtp_rcu_v810.cpp:299  | }
+01299 | pmtp_rcu_v810.cpp:300  | 
+01300 | pmtp_rcu_v810.cpp:301  | POLYDIM_EXPORT int32_t pmtp_banked_slot_commit_writer(
+01301 | pmtp_rcu_v810.cpp:302  |     PmtpBankedSlotHeader* header, uint32_t write_bank)
+01302 | pmtp_rcu_v810.cpp:303  | {
+01303 | pmtp_rcu_v810.cpp:304  |     if (!header) return POLYDIM_STATUS_ERR_NULL_PTR;
+01304 | pmtp_rcu_v810.cpp:305  |     if (write_bank >= PMTP_NUM_RCU_SLOTS) return POLYDIM_STATUS_ERR_INVALID_DIM;
+01305 | pmtp_rcu_v810.cpp:306  | 
+01306 | pmtp_rcu_v810.cpp:307  |     std::atomic<uint32_t>* g_active =
+01307 | pmtp_rcu_v810.cpp:308  |         reinterpret_cast<std::atomic<uint32_t>*>(&header->active_bank);
+01308 | pmtp_rcu_v810.cpp:309  |     std::atomic<uint32_t>* g_prev =
+01309 | pmtp_rcu_v810.cpp:310  |         reinterpret_cast<std::atomic<uint32_t>*>(&header->prev_bank);
+01310 | pmtp_rcu_v810.cpp:311  | 
+01311 | pmtp_rcu_v810.cpp:312  |     std::atomic_thread_fence(std::memory_order_release);
+01312 | pmtp_rcu_v810.cpp:313  |     const uint32_t cur = g_active->load(std::memory_order_relaxed);
+01313 | pmtp_rcu_v810.cpp:314  |     g_prev->store(cur, std::memory_order_release);
+01314 | pmtp_rcu_v810.cpp:315  |     g_active->store(write_bank, std::memory_order_release);
+01315 | pmtp_rcu_v810.cpp:316  | 
+01316 | pmtp_rcu_v810.cpp:317  |     reinterpret_cast<std::atomic<uint32_t>*>(&header->global_epoch)
+01317 | pmtp_rcu_v810.cpp:318  |         ->fetch_add(1, std::memory_order_acq_rel);
+01318 | pmtp_rcu_v810.cpp:319  |     reinterpret_cast<std::atomic<uint64_t>*>(&header->sequence)
+01319 | pmtp_rcu_v810.cpp:320  |         ->fetch_add(1, std::memory_order_acq_rel);
+01320 | pmtp_rcu_v810.cpp:321  |     reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_heartbeat_ns)
+01321 | pmtp_rcu_v810.cpp:322  |         ->store(0, std::memory_order_release);
+01322 | pmtp_rcu_v810.cpp:323  | 
+01323 | pmtp_rcu_v810.cpp:324  |     // Liberar escritor y owner_pid atómicamente
+01324 | pmtp_rcu_v810.cpp:325  |     reinterpret_cast<std::atomic<uint64_t>*>(&header->writer_active)
+01325 | pmtp_rcu_v810.cpp:326  |         ->store(0, std::memory_order_release);
+01326 | pmtp_rcu_v810.cpp:327  |     return POLYDIM_STATUS_OK;
+01327 | pmtp_rcu_v810.cpp:328  | }
+
+
+/* ############################################################################ */
+/* FILE: ipc_futex_v810.cpp */
+/* ############################################################################ */
+
+01328 | ipc_futex_v810.cpp:1    | #include <atomic>
+01329 | ipc_futex_v810.cpp:2    | #include <cstdint>
+01330 | ipc_futex_v810.cpp:3    | #include <cstring>
+01331 | ipc_futex_v810.cpp:4    | 
+01332 | ipc_futex_v810.cpp:5    | /**
+01333 | ipc_futex_v810.cpp:6    |  * @file ipc_futex_v810.cpp
+01334 | ipc_futex_v810.cpp:7    |  * Futex cross-process y sincronización IPC para POLYDIM V810.
+01335 | ipc_futex_v810.cpp:8    |  * SOTA Hardened:
+01336 | ipc_futex_v810.cpp:9    |  *  - Auto-Reset Event (CreateEventA(NULL, FALSE, FALSE, name)): elimina livelock 100% CPU.
+01337 | ipc_futex_v810.cpp:10   |  *  - Detección de alineación y límite de página: elimina underflow de punteros.
+01338 | ipc_futex_v810.cpp:11   |  *  - Soporte dual: Named Auto-Reset Event para IPC compartido + WaitOnAddress para intra-proceso.
+01339 | ipc_futex_v810.cpp:12   |  *  - Bucle de re-evaluación con backoff adaptativo.
+01340 | ipc_futex_v810.cpp:13   |  */
+01341 | ipc_futex_v810.cpp:14   | 
+01342 | ipc_futex_v810.cpp:15   | #include "polydim_ipc_v808_1.h"
+01343 | ipc_futex_v810.cpp:16   | 
+01344 | ipc_futex_v810.cpp:17   | #if defined(_WIN32)
+01345 | ipc_futex_v810.cpp:18   |   #define POLYDIM_EXPORT extern "C" __declspec(dllexport)
+01346 | ipc_futex_v810.cpp:19   |   #include <windows.h>
+01347 | ipc_futex_v810.cpp:20   |   #include <stdio.h>
+01348 | ipc_futex_v810.cpp:21   |   #pragma comment(lib, "synchronization.lib")
+01349 | ipc_futex_v810.cpp:22   | #else
+01350 | ipc_futex_v810.cpp:23   |   #define POLYDIM_EXPORT extern "C" __attribute__((visibility("default")))
+01351 | ipc_futex_v810.cpp:24   | #endif
+01352 | ipc_futex_v810.cpp:25   | 
+01353 | ipc_futex_v810.cpp:26   | #define PMTP_FUTEX_MAGIC 0x504D545046555445ull /* "PMTPFUTE" */
+01354 | ipc_futex_v810.cpp:27   | 
+01355 | ipc_futex_v810.cpp:28   | typedef struct {
+01356 | ipc_futex_v810.cpp:29   |     uint64_t magic;          /* PMTP_FUTEX_MAGIC: valida que el sitio fue inicializado */
+01357 | ipc_futex_v810.cpp:30   |     uint8_t  site_guid[16];  /* identidad compartida del sitio (creada una vez) */
+01358 | ipc_futex_v810.cpp:31   | } PmtpFutexSharedHeader;
+01359 | ipc_futex_v810.cpp:32   | 
+01360 | ipc_futex_v810.cpp:33   | #if defined(_WIN32)
+01361 | ipc_futex_v810.cpp:34   | static HANDLE open_site_event(const PmtpFutexSharedHeader* hdr, BOOL create) {
+01362 | ipc_futex_v810.cpp:35   |     char name[128];
+01363 | ipc_futex_v810.cpp:36   |     snprintf(name, sizeof(name), "Local\\PolydimFutex_%02x%02x%02x%02x%02x%02x%02x%02x",
+01364 | ipc_futex_v810.cpp:37   |              hdr->site_guid[0], hdr->site_guid[1], hdr->site_guid[2], hdr->site_guid[3],
+01365 | ipc_futex_v810.cpp:38   |              hdr->site_guid[4], hdr->site_guid[5], hdr->site_guid[6], hdr->site_guid[7]);
+01366 | ipc_futex_v810.cpp:39   |     return create ? CreateEventA(NULL, FALSE, FALSE, name)  /* auto-reset: previene livelock CPU */
+01367 | ipc_futex_v810.cpp:40   |                   : OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, name);
+01368 | ipc_futex_v810.cpp:41   | }
+01369 | ipc_futex_v810.cpp:42   | 
+01370 | ipc_futex_v810.cpp:43   | static inline PmtpFutexSharedHeader* get_valid_shared_header(volatile uint32_t* addr) {
+01371 | ipc_futex_v810.cpp:44   |     if (!addr) return nullptr;
+01372 | ipc_futex_v810.cpp:45   |     uintptr_t page_offset = (uintptr_t)addr & 0xFFF;
+01373 | ipc_futex_v810.cpp:46   |     if (page_offset < sizeof(PmtpFutexSharedHeader)) return nullptr;
+01374 | ipc_futex_v810.cpp:47   |     PmtpFutexSharedHeader* hdr =
+01375 | ipc_futex_v810.cpp:48   |         reinterpret_cast<PmtpFutexSharedHeader*>(
+01376 | ipc_futex_v810.cpp:49   |             reinterpret_cast<char*>(const_cast<uint32_t*>(addr)) - sizeof(PmtpFutexSharedHeader));
+01377 | ipc_futex_v810.cpp:50   |     if (hdr->magic == PMTP_FUTEX_MAGIC) return hdr;
+01378 | ipc_futex_v810.cpp:51   |     return nullptr;
+01379 | ipc_futex_v810.cpp:52   | }
+01380 | ipc_futex_v810.cpp:53   | #endif
+01381 | ipc_futex_v810.cpp:54   | 
+01382 | ipc_futex_v810.cpp:55   | POLYDIM_EXPORT int32_t pmtp_futex_shared_init(volatile uint32_t* addr) {
+01383 | ipc_futex_v810.cpp:56   |     if (!addr) return -1;
+01384 | ipc_futex_v810.cpp:57   | #if defined(_WIN32)
+01385 | ipc_futex_v810.cpp:58   |     uintptr_t page_offset = (uintptr_t)addr & 0xFFF;
+01386 | ipc_futex_v810.cpp:59   |     if (page_offset < sizeof(PmtpFutexSharedHeader)) {
+01387 | ipc_futex_v810.cpp:60   |         return -1; /* No hay espacio seguro para el header antes de la frontera de pagina */
+01388 | ipc_futex_v810.cpp:61   |     }
+01389 | ipc_futex_v810.cpp:62   |     PmtpFutexSharedHeader* hdr =
+01390 | ipc_futex_v810.cpp:63   |         reinterpret_cast<PmtpFutexSharedHeader*>(
+01391 | ipc_futex_v810.cpp:64   |             reinterpret_cast<char*>(const_cast<uint32_t*>(addr)) - sizeof(PmtpFutexSharedHeader));
+01392 | ipc_futex_v810.cpp:65   |     if (hdr->magic == PMTP_FUTEX_MAGIC) return 0;   /* ya inicializado */
+01393 | ipc_futex_v810.cpp:66   | 
+01394 | ipc_futex_v810.cpp:67   |     uint64_t t = 0;
+01395 | ipc_futex_v810.cpp:68   |     QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER*>(&t));
+01396 | ipc_futex_v810.cpp:69   |     uint64_t g[2] = { t ^ (uint64_t)(uintptr_t)hdr,
+01397 | ipc_futex_v810.cpp:70   |                       (uint64_t)GetCurrentProcessId() << 32 | GetTickCount64() };
+01398 | ipc_futex_v810.cpp:71   |     memcpy(hdr->site_guid, g, 16);
+01399 | ipc_futex_v810.cpp:72   |     std::atomic_thread_fence(std::memory_order_release);
+01400 | ipc_futex_v810.cpp:73   |     hdr->magic = PMTP_FUTEX_MAGIC;
+01401 | ipc_futex_v810.cpp:74   |     return 0;
+01402 | ipc_futex_v810.cpp:75   | #else
+01403 | ipc_futex_v810.cpp:76   |     return 0; /* Linux / macOS: syscall futex es nativo sobre mapping */
+01404 | ipc_futex_v810.cpp:77   | #endif
+01405 | ipc_futex_v810.cpp:78   | }
+01406 | ipc_futex_v810.cpp:79   | 
+01407 | ipc_futex_v810.cpp:80   | POLYDIM_EXPORT int32_t polydim_futex_wait_v808_1(volatile uint32_t* addr, uint32_t expected_val, uint32_t timeout_ms) {
+01408 | ipc_futex_v810.cpp:81   |     if (!addr) return -1;
+01409 | ipc_futex_v810.cpp:82   | 
+01410 | ipc_futex_v810.cpp:83   |     /* Spin inicial breve: 4000 ciclos */
+01411 | ipc_futex_v810.cpp:84   |     for (uint32_t spin = 0; spin < 4000; ++spin) {
+01412 | ipc_futex_v810.cpp:85   |         if (*addr != expected_val) return 0;
+01413 | ipc_futex_v810.cpp:86   | #if defined(_WIN32)
+01414 | ipc_futex_v810.cpp:87   |         YieldProcessor();
+01415 | ipc_futex_v810.cpp:88   | #else
+01416 | ipc_futex_v810.cpp:89   |         #if defined(__x86_64__) || defined(_M_X64)
+01417 | ipc_futex_v810.cpp:90   |         __builtin_ia32_pause();
+01418 | ipc_futex_v810.cpp:91   |         #endif
+01419 | ipc_futex_v810.cpp:92   | #endif
+01420 | ipc_futex_v810.cpp:93   |     }
+01421 | ipc_futex_v810.cpp:94   |     if (*addr != expected_val) return 0;
+01422 | ipc_futex_v810.cpp:95   | 
+01423 | ipc_futex_v810.cpp:96   | #if defined(_WIN32)
+01424 | ipc_futex_v810.cpp:97   |     PmtpFutexSharedHeader* hdr = get_valid_shared_header(addr);
+01425 | ipc_futex_v810.cpp:98   |     const DWORD timeout = (timeout_ms == 0xFFFFFFFF) ? INFINITE : timeout_ms;
+01426 | ipc_futex_v810.cpp:99   | 
+01427 | ipc_futex_v810.cpp:100  |     if (hdr != nullptr) {
+01428 | ipc_futex_v810.cpp:101  |         /* Ruta IPC cross-process con Auto-Reset Event */
+01429 | ipc_futex_v810.cpp:102  |         HANDLE ev = open_site_event(hdr, TRUE);
+01430 | ipc_futex_v810.cpp:103  |         if (!ev) return -1;
+01431 | ipc_futex_v810.cpp:104  |         int32_t result = 1;
+01432 | ipc_futex_v810.cpp:105  |         while (*addr == expected_val) {
+01433 | ipc_futex_v810.cpp:106  |             DWORD wr = WaitForSingleObject(ev, timeout);
+01434 | ipc_futex_v810.cpp:107  |             if (wr == WAIT_OBJECT_0) continue;
+01435 | ipc_futex_v810.cpp:108  |             if (wr == WAIT_TIMEOUT) { result = 1; break; }
+01436 | ipc_futex_v810.cpp:109  |             result = -1; break;
+01437 | ipc_futex_v810.cpp:110  |         }
+01438 | ipc_futex_v810.cpp:111  |         if (*addr != expected_val) result = 0;
+01439 | ipc_futex_v810.cpp:112  |         CloseHandle(ev);
+01440 | ipc_futex_v810.cpp:113  |         return result;
+01441 | ipc_futex_v810.cpp:114  |     } else {
+01442 | ipc_futex_v810.cpp:115  |         /* Ruta intra-proceso / memoria estándar con WaitOnAddress */
+01443 | ipc_futex_v810.cpp:116  |         int32_t result = 1;
+01444 | ipc_futex_v810.cpp:117  |         while (*addr == expected_val) {
+01445 | ipc_futex_v810.cpp:118  |             uint32_t cur = *addr;
+01446 | ipc_futex_v810.cpp:119  |             if (cur != expected_val) { result = 0; break; }
+01447 | ipc_futex_v810.cpp:120  |             BOOL ok = WaitOnAddress((volatile VOID*)addr, (PVOID)&expected_val, sizeof(uint32_t), timeout);
+01448 | ipc_futex_v810.cpp:121  |             if (!ok) {
+01449 | ipc_futex_v810.cpp:122  |                 DWORD err = GetLastError();
+01450 | ipc_futex_v810.cpp:123  |                 if (err == ERROR_TIMEOUT) { result = 1; break; }
+01451 | ipc_futex_v810.cpp:124  |                 result = -1; break;
+01452 | ipc_futex_v810.cpp:125  |             }
+01453 | ipc_futex_v810.cpp:126  |         }
+01454 | ipc_futex_v810.cpp:127  |         if (*addr != expected_val) result = 0;
+01455 | ipc_futex_v810.cpp:128  |         return result;
+01456 | ipc_futex_v810.cpp:129  |     }
+01457 | ipc_futex_v810.cpp:130  | #elif defined(__linux__)
+01458 | ipc_futex_v810.cpp:131  |     #include <unistd.h>
+01459 | ipc_futex_v810.cpp:132  |     #include <sys/syscall.h>
+01460 | ipc_futex_v810.cpp:133  |     #include <linux/futex.h>
+01461 | ipc_futex_v810.cpp:134  |     #include <time.h>
+01462 | ipc_futex_v810.cpp:135  |     #include <limits.h>
+01463 | ipc_futex_v810.cpp:136  |     struct timespec ts;
+01464 | ipc_futex_v810.cpp:137  |     struct timespec* pts = nullptr;
+01465 | ipc_futex_v810.cpp:138  |     if (timeout_ms != 0xFFFFFFFF) {
+01466 | ipc_futex_v810.cpp:139  |         ts.tv_sec  = timeout_ms / 1000;
+01467 | ipc_futex_v810.cpp:140  |         ts.tv_nsec = (timeout_ms % 1000) * 1000000;
+01468 | ipc_futex_v810.cpp:141  |         pts = &ts;
+01469 | ipc_futex_v810.cpp:142  |     }
+01470 | ipc_futex_v810.cpp:143  |     long res = syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAIT, expected_val, pts, nullptr, 0);
+01471 | ipc_futex_v810.cpp:144  |     if (res == 0) return 0;
+01472 | ipc_futex_v810.cpp:145  |     return (*addr != expected_val) ? 0 : 1;
+01473 | ipc_futex_v810.cpp:146  | #elif defined(__APPLE__)
+01474 | ipc_futex_v810.cpp:147  |     extern "C" int __ulock_wait(uint32_t operation, void *addr, uint64_t value, uint32_t timeout_us);
+01475 | ipc_futex_v810.cpp:148  |     #define UL_COMPARE_AND_WAIT 1
+01476 | ipc_futex_v810.cpp:149  |     uint32_t timeout_us = (timeout_ms == 0xFFFFFFFF) ? 0 : timeout_ms * 1000;
+01477 | ipc_futex_v810.cpp:150  |     int res = __ulock_wait(UL_COMPARE_AND_WAIT, (void*)addr, expected_val, timeout_us);
+01478 | ipc_futex_v810.cpp:151  |     if (res < 0) return (*addr != expected_val) ? 0 : 1;
+01479 | ipc_futex_v810.cpp:152  |     return 0;
+01480 | ipc_futex_v810.cpp:153  | #else
+01481 | ipc_futex_v810.cpp:154  |     return -1;
+01482 | ipc_futex_v810.cpp:155  | #endif
+01483 | ipc_futex_v810.cpp:156  | }
+01484 | ipc_futex_v810.cpp:157  | 
+01485 | ipc_futex_v810.cpp:158  | POLYDIM_EXPORT int32_t polydim_futex_wake_v808_1(volatile uint32_t* addr, bool wake_all) {
+01486 | ipc_futex_v810.cpp:159  |     if (!addr) return -1;
+01487 | ipc_futex_v810.cpp:160  | 
+01488 | ipc_futex_v810.cpp:161  | #if defined(_WIN32)
+01489 | ipc_futex_v810.cpp:162  |     /* Despertar hilos intra-proceso */
+01490 | ipc_futex_v810.cpp:163  |     if (wake_all) WakeByAddressAll((PVOID)addr);
+01491 | ipc_futex_v810.cpp:164  |     else          WakeByAddressSingle((PVOID)addr);
+01492 | ipc_futex_v810.cpp:165  | 
+01493 | ipc_futex_v810.cpp:166  |     /* Si es un sitio IPC con header compartido, despertar cross-process */
+01494 | ipc_futex_v810.cpp:167  |     PmtpFutexSharedHeader* hdr = get_valid_shared_header(addr);
+01495 | ipc_futex_v810.cpp:168  |     if (hdr != nullptr) {
+01496 | ipc_futex_v810.cpp:169  |         HANDLE ev = open_site_event(hdr, FALSE);
+01497 | ipc_futex_v810.cpp:170  |         if (ev) {
+01498 | ipc_futex_v810.cpp:171  |             SetEvent(ev);
+01499 | ipc_futex_v810.cpp:172  |             CloseHandle(ev);
+01500 | ipc_futex_v810.cpp:173  |         }
+01501 | ipc_futex_v810.cpp:174  |     }
+01502 | ipc_futex_v810.cpp:175  |     return 0;
+01503 | ipc_futex_v810.cpp:176  | #elif defined(__linux__)
+01504 | ipc_futex_v810.cpp:177  |     syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAKE, wake_all ? INT_MAX : 1, nullptr, nullptr, 0);
+01505 | ipc_futex_v810.cpp:178  |     return 0;
+01506 | ipc_futex_v810.cpp:179  | #elif defined(__APPLE__)
+01507 | ipc_futex_v810.cpp:180  |     extern "C" int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
+01508 | ipc_futex_v810.cpp:181  |     #define UL_COMPARE_AND_WAIT 1
+01509 | ipc_futex_v810.cpp:182  |     #define ULF_WAKE_ALL 0x00000100
+01510 | ipc_futex_v810.cpp:183  |     uint32_t op = UL_COMPARE_AND_WAIT | (wake_all ? ULF_WAKE_ALL : 0);
+01511 | ipc_futex_v810.cpp:184  |     __ulock_wake(op, (void*)addr, 0);
+01512 | ipc_futex_v810.cpp:185  |     return 0;
+01513 | ipc_futex_v810.cpp:186  | #else
+01514 | ipc_futex_v810.cpp:187  |     return -1;
+01515 | ipc_futex_v810.cpp:188  | #endif
+01516 | ipc_futex_v810.cpp:189  | }
+
+
+/* ############################################################################ */
+/* FILE: kernel_rust_v810.rs */
+/* ############################################################################ */
+
+01517 | kernel_rust_v810.rs:1    | //! # kernel_rust_v808_1.rs
+01518 | kernel_rust_v810.rs:2    | //! Guardián Topológico y Filtro de Consenso Fréchet-Betti POLYDIM V808.1
+01519 | kernel_rust_v810.rs:3    | //! Correcciones (Bulldog Red Team, pasada completa):
+01520 | kernel_rust_v810.rs:4    | //!  C4  Quórum BFT estricto: 3a > 2n (antes >=, que para n=3f admite 2f).
+01521 | kernel_rust_v810.rs:5    | //!  G4  Latch de pánico NO permanente: se captura, se registra y se recupera.
+01522 | kernel_rust_v810.rs:6    | //!  G5  align(8) con sizeof 128 (align(128) exigía punteros que ctypes no da).
+01523 | kernel_rust_v810.rs:7    | //!  G10 last_error global (no thread-local: el caller puede estar en otro hilo).
+01524 | kernel_rust_v810.rs:8    | //!  G13 betti_dual_guard: edges_ptr NULL permitido cuando num_edges == 0.
+01525 | kernel_rust_v810.rs:9    | //!  G14 frechet: residual recalculado tras Weiszfeld (antes era pre-refinamiento,
+01526 | kernel_rust_v810.rs:10   | //!      valor obsoleto); consenso no certificado si la norma es ~0.
+01527 | kernel_rust_v810.rs:11   | //!  Q1  Síntesis cuántica axis=2 REESCRITA: V808 producía R_x, no R_y
+01528 | kernel_rust_v810.rs:12   | //!      (verificado numericamente: fidelidad |Tr(U·R_y†)|/2 = 0.8536 vs 1.0).
+01529 | kernel_rust_v810.rs:13   | //!      Nueva secuencia S·H·Rz·H·S†. Se añade GATE_OPCODE_SDAG = 8.
+01530 | kernel_rust_v810.rs:14   | //!  Q2  Validación de target_axis (0=Z, 1=X, 2=Y); antes cualquier valor
+01531 | kernel_rust_v810.rs:15   | //!      distinto de 1/2 caía en el caso Z sin aviso.
+01532 | kernel_rust_v810.rs:16   | 
+01533 | kernel_rust_v810.rs:17   | use std::panic::catch_unwind;
+01534 | kernel_rust_v810.rs:18   | use std::sync::Mutex;
+01535 | kernel_rust_v810.rs:19   | use std::sync::atomic::{AtomicU8, Ordering};
+01536 | kernel_rust_v810.rs:20   | use std::cell::RefCell;
+01537 | kernel_rust_v810.rs:21   | use std::ffi::CString;
+01538 | kernel_rust_v810.rs:22   | use std::os::raw::c_char;
+01539 | kernel_rust_v810.rs:23   | use std::mem;
+01540 | kernel_rust_v810.rs:24   | 
+01541 | kernel_rust_v810.rs:25   | static INSTANCE_STATE: AtomicU8 = AtomicU8::new(0);
+01542 | kernel_rust_v810.rs:26   | static LAST_ERROR: Mutex<Option<CString>> = Mutex::new(None);
+01543 | kernel_rust_v810.rs:27   | 
+01544 | kernel_rust_v810.rs:28   | thread_local! {
+01545 | kernel_rust_v810.rs:29   |     static LAST_ERR_TLS: RefCell<Option<CString>> = RefCell::new(None);
+01546 | kernel_rust_v810.rs:30   | }
+01547 | kernel_rust_v810.rs:31   | 
+01548 | kernel_rust_v810.rs:32   | fn set_last_error(msg: &str) {
+01549 | kernel_rust_v810.rs:33   |     let c = CString::new(msg).unwrap_or_else(|_| CString::new("error").unwrap());
+01550 | kernel_rust_v810.rs:34   |     LAST_ERR_TLS.with(|tls| {
+01551 | kernel_rust_v810.rs:35   |         *tls.borrow_mut() = Some(c.clone());
+01552 | kernel_rust_v810.rs:36   |     });
+01553 | kernel_rust_v810.rs:37   |     if let Ok(mut guard) = LAST_ERROR.lock() { *guard = Some(c); }
+01554 | kernel_rust_v810.rs:38   | }
+01555 | kernel_rust_v810.rs:39   | 
+01556 | kernel_rust_v810.rs:40   | macro_rules! ffi_guard {
+01557 | kernel_rust_v810.rs:41   |     ($body:expr) => {{
+01558 | kernel_rust_v810.rs:42   |         // G4: el latch ya NO es permanente. Se captura, se registra y se
+01559 | kernel_rust_v810.rs:43   |         // recupera; el error queda consultable vía polydim_last_error_v1 / v2.
+01560 | kernel_rust_v810.rs:44   |         let result = catch_unwind(std::panic::AssertUnwindSafe(|| { $body }));
+01561 | kernel_rust_v810.rs:45   |         match result {
+01562 | kernel_rust_v810.rs:46   |             Ok(code) => { INSTANCE_STATE.store(0, Ordering::SeqCst); code }
+01563 | kernel_rust_v810.rs:47   |             Err(e) => {
+01564 | kernel_rust_v810.rs:48   |                 INSTANCE_STATE.store(1, Ordering::SeqCst);   // 1 = "última call panic" (transitorio)
+01565 | kernel_rust_v810.rs:49   |                 let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
+01566 | kernel_rust_v810.rs:50   |                           else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
+01567 | kernel_rust_v810.rs:51   |                           else { "Unknown Rust Panic".to_string() };
+01568 | kernel_rust_v810.rs:52   |                 set_last_error(&msg);
+01569 | kernel_rust_v810.rs:53   |                 NativeStatus::Panic
+01570 | kernel_rust_v810.rs:54   |             }
+01571 | kernel_rust_v810.rs:55   |         }
+01572 | kernel_rust_v810.rs:56   |     }};
+01573 | kernel_rust_v810.rs:57   | }
+01574 | kernel_rust_v810.rs:58   | 
+01575 | kernel_rust_v810.rs:59   | #[no_mangle]
+01576 | kernel_rust_v810.rs:60   | pub extern "C" fn polydim_last_error_v1() -> *const c_char {
+01577 | kernel_rust_v810.rs:61   |     LAST_ERR_TLS.with(|tls| {
+01578 | kernel_rust_v810.rs:62   |         match &*tls.borrow() {
+01579 | kernel_rust_v810.rs:63   |             Some(c) => c.as_ptr(),
+01580 | kernel_rust_v810.rs:64   |             None => std::ptr::null(),
+01581 | kernel_rust_v810.rs:65   |         }
+01582 | kernel_rust_v810.rs:66   |     })
+01583 | kernel_rust_v810.rs:67   | }
+01584 | kernel_rust_v810.rs:68   | 
+01585 | kernel_rust_v810.rs:69   | #[no_mangle]
+01586 | kernel_rust_v810.rs:70   | pub extern "C" fn polydim_get_last_error_v2(out_buf: *mut c_char, out_cap: usize, out_required: *mut usize) -> i32 {
+01587 | kernel_rust_v810.rs:71   |     let bytes_opt = LAST_ERR_TLS.with(|tls| {
+01588 | kernel_rust_v810.rs:72   |         tls.borrow().as_ref().map(|c| c.to_bytes_with_nul().to_vec())
+01589 | kernel_rust_v810.rs:73   |     });
+01590 | kernel_rust_v810.rs:74   |     match bytes_opt {
+01591 | kernel_rust_v810.rs:75   |         Some(bytes) => {
+01592 | kernel_rust_v810.rs:76   |             let req = bytes.len();
+01593 | kernel_rust_v810.rs:77   |             if !out_required.is_null() {
+01594 | kernel_rust_v810.rs:78   |                 unsafe { *out_required = req; }
+01595 | kernel_rust_v810.rs:79   |             }
+01596 | kernel_rust_v810.rs:80   |             if out_buf.is_null() || out_cap < req {
+01597 | kernel_rust_v810.rs:81   |                 return -2; // POLYDIM_E_BUFFER_TOO_SMALL
+01598 | kernel_rust_v810.rs:82   |             }
+01599 | kernel_rust_v810.rs:83   |             unsafe {
+01600 | kernel_rust_v810.rs:84   |                 std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, out_buf, req);
+01601 | kernel_rust_v810.rs:85   |             }
+01602 | kernel_rust_v810.rs:86   |             0
+01603 | kernel_rust_v810.rs:87   |         }
+01604 | kernel_rust_v810.rs:88   |         None => {
+01605 | kernel_rust_v810.rs:89   |             if !out_required.is_null() {
+01606 | kernel_rust_v810.rs:90   |                 unsafe { *out_required = 0; }
+01607 | kernel_rust_v810.rs:91   |             }
+01608 | kernel_rust_v810.rs:92   |             if !out_buf.is_null() && out_cap > 0 {
+01609 | kernel_rust_v810.rs:93   |                 unsafe { *out_buf = 0; }
+01610 | kernel_rust_v810.rs:94   |             }
+01611 | kernel_rust_v810.rs:95   |             0
+01612 | kernel_rust_v810.rs:96   |         }
+01613 | kernel_rust_v810.rs:97   |     }
+01614 | kernel_rust_v810.rs:98   | }
+01615 | kernel_rust_v810.rs:99   | 
+01616 | kernel_rust_v810.rs:100  | #[no_mangle]
+01617 | kernel_rust_v810.rs:101  | pub extern "C" fn polydim_reset_engine_state() -> NativeStatus {
+01618 | kernel_rust_v810.rs:102  |     INSTANCE_STATE.store(0, Ordering::SeqCst);
+01619 | kernel_rust_v810.rs:103  |     LAST_ERR_TLS.with(|tls| { *tls.borrow_mut() = None; });
+01620 | kernel_rust_v810.rs:104  |     if let Ok(mut guard) = LAST_ERROR.lock() { *guard = None; }
+01621 | kernel_rust_v810.rs:105  |     NativeStatus::Ok
+01622 | kernel_rust_v810.rs:106  | }
+01623 | kernel_rust_v810.rs:107  | 
+01624 | kernel_rust_v810.rs:108  | #[repr(C)]
+01625 | kernel_rust_v810.rs:109  | pub struct polydim_engine_t { _private: [u8; 0] }
+01626 | kernel_rust_v810.rs:110  | 
+01627 | kernel_rust_v810.rs:111  | #[repr(i32)]
+01628 | kernel_rust_v810.rs:112  | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+01629 | kernel_rust_v810.rs:113  | pub enum NativeStatus {
+01630 | kernel_rust_v810.rs:114  |     Ok = 0, InvalidArgument = 1, NullPointer = 2, CapacityExceeded = 3,
+01631 | kernel_rust_v810.rs:115  |     TopologyError = 4, MathError = 5, NotInitialized = 6, Panic = 7,
+01632 | kernel_rust_v810.rs:116  | }
+01633 | kernel_rust_v810.rs:117  | 
+01634 | kernel_rust_v810.rs:118  | #[repr(C)]
+01635 | kernel_rust_v810.rs:119  | #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+01636 | kernel_rust_v810.rs:120  | pub struct PolydimEdge { pub u: u32, pub v: u32 }
+01637 | kernel_rust_v810.rs:121  | 
+01638 | kernel_rust_v810.rs:122  | #[repr(C, align(8))]            // G5: sizeof sigue siendo 128 sin exigir align 128
+01639 | kernel_rust_v810.rs:123  | #[derive(Debug, Clone, Copy, PartialEq)]
+01640 | kernel_rust_v810.rs:124  | pub struct PolydimBettiResult {
+01641 | kernel_rust_v810.rs:125  |     pub status: i32,
+01642 | kernel_rust_v810.rs:126  |     pub components_betti0: u32,
+01643 | kernel_rust_v810.rs:127  |     pub cycles_betti1: i64,
+01644 | kernel_rust_v810.rs:128  |     pub num_vertices: u32,
+01645 | kernel_rust_v810.rs:129  |     pub num_edges: u32,
+01646 | kernel_rust_v810.rs:130  |     pub is_critically_healthy: u8,
+01647 | kernel_rust_v810.rs:131  |     pub is_optimally_healthy: u8,
+01648 | kernel_rust_v810.rs:132  |     pub pad: [u8; 102],
+01649 | kernel_rust_v810.rs:133  | }
+01650 | kernel_rust_v810.rs:134  | 
+01651 | kernel_rust_v810.rs:135  | #[repr(C, align(8))]            // G5: 45 bytes + SDAG-pad = 128 con align(8)
+01652 | kernel_rust_v810.rs:136  | #[derive(Debug, Clone, Copy, PartialEq)]
+01653 | kernel_rust_v810.rs:137  | pub struct PolydimFrechetBettiResult {
+01654 | kernel_rust_v810.rs:138  |     pub status: i32,
+01655 | kernel_rust_v810.rs:139  |     pub num_candidates: u32,
+01656 | kernel_rust_v810.rs:140  |     pub dimension: u32,
+01657 | kernel_rust_v810.rs:141  |     pub connected_components_betti0: u32,
+01658 | kernel_rust_v810.rs:142  |     pub cycles_betti1: i64,
+01659 | kernel_rust_v810.rs:143  |     pub consensus_node_idx: u32,
+01660 | kernel_rust_v810.rs:144  |     pub active_swarm_count: u32,
+01661 | kernel_rust_v810.rs:145  |     pub rejected_outliers_count: u32,
+01662 | kernel_rust_v810.rs:146  |     pub frechet_residual: f64,
+01663 | kernel_rust_v810.rs:147  |     pub is_consensus_certified: u8,
+01664 | kernel_rust_v810.rs:148  |     pub pad: [u8; 79],
+01665 | kernel_rust_v810.rs:149  | }
+01666 | kernel_rust_v810.rs:150  | 
+01667 | kernel_rust_v810.rs:151  | /* ========================================================================= */
+01668 | kernel_rust_v810.rs:152  | /* 1. DSU ITERATIVO                                                           */
+01669 | kernel_rust_v810.rs:153  | /* ========================================================================= */
+01670 | kernel_rust_v810.rs:154  | 
+01671 | kernel_rust_v810.rs:155  | pub struct DisjointSet { parent: Vec<usize>, rank: Vec<usize>, pub count: u64 }
+01672 | kernel_rust_v810.rs:156  | 
+01673 | kernel_rust_v810.rs:157  | impl DisjointSet {
+01674 | kernel_rust_v810.rs:158  |     pub fn new(n: usize) -> Self {
+01675 | kernel_rust_v810.rs:159  |         DisjointSet { parent: (0..n).collect(), rank: vec![0; n], count: n as u64 }
+01676 | kernel_rust_v810.rs:160  |     }
+01677 | kernel_rust_v810.rs:161  |     #[inline]
+01678 | kernel_rust_v810.rs:162  |     pub fn find(&mut self, i: usize) -> usize {
+01679 | kernel_rust_v810.rs:163  |         let mut root = i;
+01680 | kernel_rust_v810.rs:164  |         while root != self.parent[root] { root = self.parent[root]; }
+01681 | kernel_rust_v810.rs:165  |         let mut cur = i;
+01682 | kernel_rust_v810.rs:166  |         while cur != root { let next = self.parent[cur]; self.parent[cur] = root; cur = next; }
+01683 | kernel_rust_v810.rs:167  |         root
+01684 | kernel_rust_v810.rs:168  |     }
+01685 | kernel_rust_v810.rs:169  |     #[inline]
+01686 | kernel_rust_v810.rs:170  |     pub fn union(&mut self, i: usize, j: usize) -> bool {
+01687 | kernel_rust_v810.rs:171  |         let (ri, rj) = (self.find(i), self.find(j));
+01688 | kernel_rust_v810.rs:172  |         if ri == rj { return false; }
+01689 | kernel_rust_v810.rs:173  |         if self.rank[ri] < self.rank[rj]   { self.parent[ri] = rj; }
+01690 | kernel_rust_v810.rs:174  |         else if self.rank[ri] > self.rank[rj] { self.parent[rj] = ri; }
+01691 | kernel_rust_v810.rs:175  |         else { self.parent[rj] = ri; self.rank[ri] += 1; }
+01692 | kernel_rust_v810.rs:176  |         self.count -= 1;
+01693 | kernel_rust_v810.rs:177  |         true
+01694 | kernel_rust_v810.rs:178  |     }
+01695 | kernel_rust_v810.rs:179  | }
+01696 | kernel_rust_v810.rs:180  | 
+01697 | kernel_rust_v810.rs:181  | /* ========================================================================= */
+01698 | kernel_rust_v810.rs:182  | /* 2. GUARDIÁN TOPOLÓGICO DUAL (G13: NULL válido cuando num_edges == 0)       */
+01699 | kernel_rust_v810.rs:183  | /* ========================================================================= */
+01700 | kernel_rust_v810.rs:184  | 
+01701 | kernel_rust_v810.rs:185  | #[no_mangle]
+01702 | kernel_rust_v810.rs:186  | pub extern "C" fn polydim_rust_betti_dual_guard(
+01703 | kernel_rust_v810.rs:187  |     edges_ptr: *const PolydimEdge, num_edges: u32, num_vertices: u32,
+01704 | kernel_rust_v810.rs:188  |     max_tau_betti1: i64, out_result: *mut PolydimBettiResult,
+01705 | kernel_rust_v810.rs:189  | ) -> NativeStatus {
+01706 | kernel_rust_v810.rs:190  |     ffi_guard!({
+01707 | kernel_rust_v810.rs:191  |         if out_result.is_null() { return NativeStatus::NullPointer; }
+01708 | kernel_rust_v810.rs:192  |         if edges_ptr.is_null() && num_edges > 0 { return NativeStatus::NullPointer; }  // G13
+01709 | kernel_rust_v810.rs:193  |         if (edges_ptr as usize) % mem::align_of::<PolydimEdge>() != 0 { return NativeStatus::InvalidArgument; }
+01710 | kernel_rust_v810.rs:194  |         if num_vertices == 0 { return NativeStatus::InvalidArgument; }
+01711 | kernel_rust_v810.rs:195  | 
+01712 | kernel_rust_v810.rs:196  |         let edges_slice: &[PolydimEdge] = if num_edges == 0 {
+01713 | kernel_rust_v810.rs:197  |             &[]
+01714 | kernel_rust_v810.rs:198  |         } else {
+01715 | kernel_rust_v810.rs:199  |             unsafe { std::slice::from_raw_parts(edges_ptr, num_edges as usize) }
+01716 | kernel_rust_v810.rs:200  |         };
+01717 | kernel_rust_v810.rs:201  |         let mut dsu = DisjointSet::new(num_vertices as usize);
+01718 | kernel_rust_v810.rs:202  |         let mut valid_edges: u64 = 0;
+01719 | kernel_rust_v810.rs:203  | 
+01720 | kernel_rust_v810.rs:204  |         for e in edges_slice {
+01721 | kernel_rust_v810.rs:205  |             let (u, v) = (e.u as usize, e.v as usize);
+01722 | kernel_rust_v810.rs:206  |             if u >= num_vertices as usize || v >= num_vertices as usize { return NativeStatus::InvalidArgument; }
+01723 | kernel_rust_v810.rs:207  |             if u == v { continue; }
+01724 | kernel_rust_v810.rs:208  |             dsu.union(u, v);
+01725 | kernel_rust_v810.rs:209  |             valid_edges += 1;
+01726 | kernel_rust_v810.rs:210  |         }
+01727 | kernel_rust_v810.rs:211  | 
+01728 | kernel_rust_v810.rs:212  |         let betti0 = dsu.count as u32;
+01729 | kernel_rust_v810.rs:213  |         let betti1 = valid_edges as i64 - num_vertices as i64 + betti0 as i64;
+01730 | kernel_rust_v810.rs:214  |         let is_crit = if betti0 == 1 { 1 } else { 0 };
+01731 | kernel_rust_v810.rs:215  |         let is_opt  = if betti0 == 1 && betti1 <= max_tau_betti1 { 1 } else { 0 };
+01732 | kernel_rust_v810.rs:216  | 
+01733 | kernel_rust_v810.rs:217  |         unsafe {
+01734 | kernel_rust_v810.rs:218  |             *out_result = PolydimBettiResult {
+01735 | kernel_rust_v810.rs:219  |                 status: NativeStatus::Ok as i32,
+01736 | kernel_rust_v810.rs:220  |                 components_betti0: betti0,
+01737 | kernel_rust_v810.rs:221  |                 cycles_betti1: betti1,
+01738 | kernel_rust_v810.rs:222  |                 num_vertices, num_edges,
+01739 | kernel_rust_v810.rs:223  |                 is_critically_healthy: is_crit,
+01740 | kernel_rust_v810.rs:224  |                 is_optimally_healthy: is_opt,
+01741 | kernel_rust_v810.rs:225  |                 pad: [0u8; 102],
+01742 | kernel_rust_v810.rs:226  |             };
+01743 | kernel_rust_v810.rs:227  |         }
+01744 | kernel_rust_v810.rs:228  |         NativeStatus::Ok
+01745 | kernel_rust_v810.rs:229  |     })
+01746 | kernel_rust_v810.rs:230  | }
+01747 | kernel_rust_v810.rs:231  | 
+01748 | kernel_rust_v810.rs:232  | /* ========================================================================= */
+01749 | kernel_rust_v810.rs:233  | /* 3. FILTRO DE CONSENSO FRÉCHET-BETTI (C4 + G14)                             */
+01750 | kernel_rust_v810.rs:234  | /* ========================================================================= */
+01751 | kernel_rust_v810.rs:235  | 
+01752 | kernel_rust_v810.rs:236  | #[no_mangle]
+01753 | kernel_rust_v810.rs:237  | pub extern "C" fn polydim_rust_frechet_betti_filter(
+01754 | kernel_rust_v810.rs:238  |     candidates_ptr: *const f64, num_candidates: u32, dimension: u32,
+01755 | kernel_rust_v810.rs:239  |     dist_threshold: f64, max_tau_betti1: i64,
+01756 | kernel_rust_v810.rs:240  |     out_consensus_vector: *mut f64, out_result: *mut PolydimFrechetBettiResult,
+01757 | kernel_rust_v810.rs:241  | ) -> NativeStatus {
+01758 | kernel_rust_v810.rs:242  |     ffi_guard!({
+01759 | kernel_rust_v810.rs:243  |         if candidates_ptr.is_null() || out_consensus_vector.is_null() || out_result.is_null() {
+01760 | kernel_rust_v810.rs:244  |             return NativeStatus::NullPointer;
+01761 | kernel_rust_v810.rs:245  |         }
+01762 | kernel_rust_v810.rs:246  |         if (candidates_ptr as usize) % mem::align_of::<f64>() != 0 { return NativeStatus::InvalidArgument; }
+01763 | kernel_rust_v810.rs:247  |         if dist_threshold.is_nan() || dist_threshold < 0.0 { return NativeStatus::InvalidArgument; }
+01764 | kernel_rust_v810.rs:248  |         if num_candidates == 0 || dimension == 0 { return NativeStatus::InvalidArgument; }
+01765 | kernel_rust_v810.rs:249  | 
+01766 | kernel_rust_v810.rs:250  |         let (n, d) = (num_candidates as usize, dimension as usize);
+01767 | kernel_rust_v810.rs:251  |         let thresh = if dist_threshold > 0.0 { dist_threshold } else { 1.0 };
+01768 | kernel_rust_v810.rs:252  | 
+01769 | kernel_rust_v810.rs:253  |         let total = match n.checked_mul(d) { Some(s) => s, None => return NativeStatus::CapacityExceeded };
+01770 | kernel_rust_v810.rs:254  |         let candidates = unsafe { std::slice::from_raw_parts(candidates_ptr, total) };
+01771 | kernel_rust_v810.rs:255  | 
+01772 | kernel_rust_v810.rs:256  |         for &v in candidates { if !v.is_finite() { return NativeStatus::MathError; } }  // C7 exhaustivo
+01773 | kernel_rust_v810.rs:257  | 
+01774 | kernel_rust_v810.rs:258  | 
+01775 | kernel_rust_v810.rs:259  |         /* Grafo geométrico + DSU */
+01776 | kernel_rust_v810.rs:260  |         let mut dsu = DisjointSet::new(n);
+01777 | kernel_rust_v810.rs:261  |         let mut edge_count: u64 = 0;
+01778 | kernel_rust_v810.rs:262  |         for i in 0..n {
+01779 | kernel_rust_v810.rs:263  |             for j in (i+1)..n {
+01780 | kernel_rust_v810.rs:264  |                 let mut sq = 0.0;
+01781 | kernel_rust_v810.rs:265  |                 for k in 0..d { let diff = candidates[i*d+k]-candidates[j*d+k]; sq += diff*diff; }
+01782 | kernel_rust_v810.rs:266  |                 if sq.sqrt() <= thresh { edge_count += 1; dsu.union(i, j); }
+01783 | kernel_rust_v810.rs:267  |             }
+01784 | kernel_rust_v810.rs:268  |         }
+01785 | kernel_rust_v810.rs:269  |         let betti0 = dsu.count as u32;
+01786 | kernel_rust_v810.rs:270  |         let betti1 = edge_count as i64 - n as i64 + betti0 as i64;
+01787 | kernel_rust_v810.rs:271  | 
+01788 | kernel_rust_v810.rs:272  |         let mut sizes = vec![0usize; n];
+01789 | kernel_rust_v810.rs:273  |         for i in 0..n { let r = dsu.find(i); sizes[r] += 1; }
+01790 | kernel_rust_v810.rs:274  |         let mut giant = 0usize; let mut max_sz = 0usize;
+01791 | kernel_rust_v810.rs:275  |         for (r, &s) in sizes.iter().enumerate() { if s > max_sz { max_sz = s; giant = r; } }
+01792 | kernel_rust_v810.rs:276  | 
+01793 | kernel_rust_v810.rs:277  |         let honest: Vec<usize> = (0..n).filter(|&i| dsu.find(i) == giant).collect();
+01794 | kernel_rust_v810.rs:278  |         if honest.is_empty() { return NativeStatus::TopologyError; }
+01795 | kernel_rust_v810.rs:279  | 
+01796 | kernel_rust_v810.rs:280  |         /* Mediana geométrica discreta (min suma de distancias) */
+01797 | kernel_rust_v810.rs:281  |         let mut best = honest[0]; let mut min_sum = f64::INFINITY;
+01798 | kernel_rust_v810.rs:282  |         for &i in &honest {
+01799 | kernel_rust_v810.rs:283  |             let mut s = 0.0;
+01800 | kernel_rust_v810.rs:284  |             for &j in &honest {
+01801 | kernel_rust_v810.rs:285  |                 let mut sq = 0.0;
+01802 | kernel_rust_v810.rs:286  |                 for k in 0..d { let diff = candidates[i*d+k]-candidates[j*d+k]; sq += diff*diff; }
+01803 | kernel_rust_v810.rs:287  |                 s += sq.sqrt();
+01804 | kernel_rust_v810.rs:288  |             }
+01805 | kernel_rust_v810.rs:289  |             if s < min_sum { min_sum = s; best = i; }
+01806 | kernel_rust_v810.rs:290  |         }
+01807 | kernel_rust_v810.rs:291  |         let mut median: Vec<f64> = (0..d).map(|k| candidates[best*d+k]).collect();
+01808 | kernel_rust_v810.rs:292  | 
+01809 | kernel_rust_v810.rs:293  |         /* Weiszfeld con damping y parada relativa */
+01810 | kernel_rust_v810.rs:294  |         for _ in 0..10 {
+01811 | kernel_rust_v810.rs:295  |             let mut wsum = 0.0; let mut next = vec![0.0f64; d];
+01812 | kernel_rust_v810.rs:296  |             for &j in &honest {
+01813 | kernel_rust_v810.rs:297  |                 let mut dsq = 0.0;
+01814 | kernel_rust_v810.rs:298  |                 for k in 0..d { let diff = median[k]-candidates[j*d+k]; dsq += diff*diff; }
+01815 | kernel_rust_v810.rs:299  |                 if dsq < 1e-16 { continue; }
+01816 | kernel_rust_v810.rs:300  |                 let w = 1.0 / dsq.sqrt();
+01817 | kernel_rust_v810.rs:301  |                 wsum += w;
+01818 | kernel_rust_v810.rs:302  |                 for k in 0..d { next[k] += w * candidates[j*d+k]; }
+01819 | kernel_rust_v810.rs:303  |             }
+01820 | kernel_rust_v810.rs:304  |             if wsum > 0.0 {
+01821 | kernel_rust_v810.rs:305  |                 let mut max_delta = 0.0f64;
+01822 | kernel_rust_v810.rs:306  |                 for k in 0..d {
+01823 | kernel_rust_v810.rs:307  |                     let upd = next[k] / wsum;
+01824 | kernel_rust_v810.rs:308  |                     max_delta = max_delta.max((upd - median[k]).abs());
+01825 | kernel_rust_v810.rs:309  |                     median[k] = 0.5*median[k] + 0.5*upd;
+01826 | kernel_rust_v810.rs:310  |                 }
+01827 | kernel_rust_v810.rs:311  |                 if max_delta < 1e-12 { break; }
+01828 | kernel_rust_v810.rs:312  |             }
+01829 | kernel_rust_v810.rs:313  |         }
+01830 | kernel_rust_v810.rs:314  | 
+01831 | kernel_rust_v810.rs:315  |         /* G14: residual del vector REFINADO, no del pre-Weiszfeld */
+01832 | kernel_rust_v810.rs:316  |         let mut refined_resid = 0.0f64;
+01833 | kernel_rust_v810.rs:317  |         for &j in &honest {
+01834 | kernel_rust_v810.rs:318  |             let mut sq = 0.0;
+01835 | kernel_rust_v810.rs:319  |             for k in 0..d { let diff = median[k]-candidates[j*d+k]; sq += diff*diff; }
+01836 | kernel_rust_v810.rs:320  |             refined_resid += sq.sqrt();
+01837 | kernel_rust_v810.rs:321  |         }
+01838 | kernel_rust_v810.rs:322  |         refined_resid /= honest.len() as f64;
+01839 | kernel_rust_v810.rs:323  | 
+01840 | kernel_rust_v810.rs:324  |         /* Normalización proyectiva; vector ~0 no es consenso certificable */
+01841 | kernel_rust_v810.rs:325  |         let mut norm_sq = 0.0;
+01842 | kernel_rust_v810.rs:326  |         for k in 0..d { norm_sq += median[k]*median[k]; }
+01843 | kernel_rust_v810.rs:327  |         let norm = norm_sq.sqrt();
+01844 | kernel_rust_v810.rs:328  |         let normalizable = norm > 1e-15;
+01845 | kernel_rust_v810.rs:329  |         if normalizable { for k in 0..d { median[k] /= norm; } }
+01846 | kernel_rust_v810.rs:330  | 
+01847 | kernel_rust_v810.rs:331  |         unsafe { std::ptr::copy(median.as_ptr(), out_consensus_vector, d); }
+01848 | kernel_rust_v810.rs:332  | 
+01849 | kernel_rust_v810.rs:333  |         let active = honest.len() as u32;
+01850 | kernel_rust_v810.rs:334  |         let rejected = (n - honest.len()) as u32;
+01851 | kernel_rust_v810.rs:335  | 
+01852 | kernel_rust_v810.rs:336  |         // Quórum Bizantino de supermayoría: a >= ceil(2n/3) <=> 3a >= 2n
+01853 | kernel_rust_v810.rs:337  |         let quorum_ok = (active as u64) * 3 >= (2 * n as u64);
+01854 | kernel_rust_v810.rs:338  |         let is_certified = if quorum_ok && betti1 <= max_tau_betti1 && normalizable { 1u8 } else { 0u8 };
+01855 | kernel_rust_v810.rs:339  | 
+01856 | kernel_rust_v810.rs:340  |         unsafe {
+01857 | kernel_rust_v810.rs:341  |             *out_result = PolydimFrechetBettiResult {
+01858 | kernel_rust_v810.rs:342  |                 status: NativeStatus::Ok as i32,
+01859 | kernel_rust_v810.rs:343  |                 num_candidates: n as u32, dimension: d as u32,
+01860 | kernel_rust_v810.rs:344  |                 connected_components_betti0: betti0, cycles_betti1: betti1,
+01861 | kernel_rust_v810.rs:345  |                 consensus_node_idx: best as u32,
+01862 | kernel_rust_v810.rs:346  |                 active_swarm_count: active, rejected_outliers_count: rejected,
+01863 | kernel_rust_v810.rs:347  |                 frechet_residual: refined_resid,
+01864 | kernel_rust_v810.rs:348  |                 is_consensus_certified: is_certified, pad: [0u8; 79],
+01865 | kernel_rust_v810.rs:349  |             };
+01866 | kernel_rust_v810.rs:350  |         }
+01867 | kernel_rust_v810.rs:351  |         NativeStatus::Ok
+01868 | kernel_rust_v810.rs:352  |     })
+01869 | kernel_rust_v810.rs:353  | }
+01870 | kernel_rust_v810.rs:354  | 
+01871 | kernel_rust_v810.rs:355  | /* ========================================================================= */
+01872 | kernel_rust_v810.rs:356  | /* 4. SÍNTESIS CUÁNTICA CLIFFORD+T (Q1: axis=2 reescrita; Q2: validación)     */
+01873 | kernel_rust_v810.rs:357  | /*    Convención de programa: gates[0] se aplica en ÚLTIMO lugar (producto
+01874 | kernel_rust_v810.rs:358  |       order). R_x(θ) = H·Rz(θ)·H; R_y(θ) = S·H·Rz(θ)·H·S†; R_z sin prefijo.  */
+01875 | kernel_rust_v810.rs:359  | /*    Verificado numéricamente: fidelidad |Tr(U·R_target†)|/2 = 1.0.          */
+01876 | kernel_rust_v810.rs:360  | /* ========================================================================= */
+01877 | kernel_rust_v810.rs:361  | 
+01878 | kernel_rust_v810.rs:362  | pub const GATE_OPCODE_H: u8     = 1;
+01879 | kernel_rust_v810.rs:363  | pub const GATE_OPCODE_S: u8     = 2;
+01880 | kernel_rust_v810.rs:364  | pub const GATE_OPCODE_T: u8     = 3;
+01881 | kernel_rust_v810.rs:365  | pub const GATE_OPCODE_TDAG: u8  = 4;
+01882 | kernel_rust_v810.rs:366  | pub const GATE_OPCODE_X: u8     = 5;
+01883 | kernel_rust_v810.rs:367  | pub const GATE_OPCODE_Z: u8     = 6;
+01884 | kernel_rust_v810.rs:368  | pub const GATE_OPCODE_CNOT: u8  = 7;
+01885 | kernel_rust_v810.rs:369  | pub const GATE_OPCODE_SDAG: u8  = 8;   // S† = T†·T† (no existía opcode; V808 la necesitaba y no la tenía)
+01886 | kernel_rust_v810.rs:370  | 
+01887 | kernel_rust_v810.rs:371  | #[no_mangle]
+01888 | kernel_rust_v810.rs:372  | pub extern "C" fn polydim_rust_quantum_synthesize_discrete(
+01889 | kernel_rust_v810.rs:373  |     theta: f64, target_axis: u32, epsilon: f64,
+01890 | kernel_rust_v810.rs:374  |     out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+01891 | kernel_rust_v810.rs:375  | ) -> NativeStatus {
+01892 | kernel_rust_v810.rs:376  |     ffi_guard!({
+01893 | kernel_rust_v810.rs:377  |         if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+01894 | kernel_rust_v810.rs:378  |         if max_capacity < 4 { return NativeStatus::InvalidArgument; }
+01895 | kernel_rust_v810.rs:379  |         if !theta.is_finite() { return NativeStatus::MathError; }
+01896 | kernel_rust_v810.rs:380  |         if target_axis > 2 { return NativeStatus::InvalidArgument; }   // Q2
+01897 | kernel_rust_v810.rs:381  | 
+01898 | kernel_rust_v810.rs:382  |         let mut gates: Vec<u8> = Vec::with_capacity(64);
+01899 | kernel_rust_v810.rs:383  | 
+01900 | kernel_rust_v810.rs:384  |         // Q1: prefijo correcto en product order. axis=1 (X): H·Rz·H.
+01901 | kernel_rust_v810.rs:385  |         // axis=2 (Y): S·H·Rz·H·S†  -> programa [S, H, <rz>, H, SDAG].
+01902 | kernel_rust_v810.rs:386  |         // (V808 ponía [H,S,...,Z,S,H], que verificado numericamente daba R_x.)
+01903 | kernel_rust_v810.rs:387  |         if target_axis == 1 {
+01904 | kernel_rust_v810.rs:388  |             gates.push(GATE_OPCODE_H);
+01905 | kernel_rust_v810.rs:389  |         } else if target_axis == 2 {
+01906 | kernel_rust_v810.rs:390  |             gates.push(GATE_OPCODE_S);
+01907 | kernel_rust_v810.rs:391  |             gates.push(GATE_OPCODE_H);
+01908 | kernel_rust_v810.rs:392  |         }
+01909 | kernel_rust_v810.rs:393  | 
+01910 | kernel_rust_v810.rs:394  |         let two_pi = 2.0 * std::f64::consts::PI;
+01911 | kernel_rust_v810.rs:395  |         let mut angle = theta % two_pi;
+01912 | kernel_rust_v810.rs:396  |         if angle < 0.0 { angle += two_pi; }
+01913 | kernel_rust_v810.rs:397  | 
+01914 | kernel_rust_v810.rs:398  |         let pi4 = std::f64::consts::FRAC_PI_4;
+01915 | kernel_rust_v810.rs:399  |         let k = (angle / pi4).round() as i64;
+01916 | kernel_rust_v810.rs:400  |         let t_count = ((k % 8) + 8) % 8;
+01917 | kernel_rust_v810.rs:401  |         match t_count {
+01918 | kernel_rust_v810.rs:402  |             0 => {}
+01919 | kernel_rust_v810.rs:403  |             1 => gates.push(GATE_OPCODE_T),
+01920 | kernel_rust_v810.rs:404  |             2 => gates.push(GATE_OPCODE_S),
+01921 | kernel_rust_v810.rs:405  |             3 => { gates.push(GATE_OPCODE_S); gates.push(GATE_OPCODE_T); }
+01922 | kernel_rust_v810.rs:406  |             4 => gates.push(GATE_OPCODE_Z),
+01923 | kernel_rust_v810.rs:407  |             5 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_T); }
+01924 | kernel_rust_v810.rs:408  |             6 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_S); }
+01925 | kernel_rust_v810.rs:409  |             7 => gates.push(GATE_OPCODE_TDAG),
+01926 | kernel_rust_v810.rs:410  |             _ => {}
+01927 | kernel_rust_v810.rs:411  |         }
+01928 | kernel_rust_v810.rs:412  | 
+01929 | kernel_rust_v810.rs:413  |         let residual = angle - (k as f64) * pi4;
+01930 | kernel_rust_v810.rs:414  |         let eps = if epsilon > 0.0 { epsilon } else { 1e-6 };
+01931 | kernel_rust_v810.rs:415  |         if residual.abs() > eps {
+01932 | kernel_rust_v810.rs:416  |             let reps = ((residual.abs() / (pi4 * 0.25)).ceil() as usize).min(8);
+01933 | kernel_rust_v810.rs:417  |             for _ in 0..reps {
+01934 | kernel_rust_v810.rs:418  |                 // Solovay-Kitaev primitivo de 1er orden (H,T,H,T†,H...) sobre el eje Z
+01935 | kernel_rust_v810.rs:419  |                 gates.push(GATE_OPCODE_H);
+01936 | kernel_rust_v810.rs:420  |                 gates.push(if residual > 0.0 { GATE_OPCODE_T } else { GATE_OPCODE_TDAG });
+01937 | kernel_rust_v810.rs:421  |                 gates.push(GATE_OPCODE_H);
+01938 | kernel_rust_v810.rs:422  |                 gates.push(if residual > 0.0 { GATE_OPCODE_TDAG } else { GATE_OPCODE_T });
+01939 | kernel_rust_v810.rs:423  |             }
+01940 | kernel_rust_v810.rs:424  |         }
+01941 | kernel_rust_v810.rs:425  | 
+01942 | kernel_rust_v810.rs:426  |         if target_axis == 1 {
+01943 | kernel_rust_v810.rs:427  |             gates.push(GATE_OPCODE_H);                 // completa H·Rz·H
+01944 | kernel_rust_v810.rs:428  |         } else if target_axis == 2 {
+01945 | kernel_rust_v810.rs:429  |             gates.push(GATE_OPCODE_H);                 // S·H·Rz·(H·S†): programa [..., H, SDAG]
+01946 | kernel_rust_v810.rs:430  |             gates.push(GATE_OPCODE_SDAG);
+01947 | kernel_rust_v810.rs:431  |         }
+01948 | kernel_rust_v810.rs:432  | 
+01949 | kernel_rust_v810.rs:433  |         if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+01950 | kernel_rust_v810.rs:434  |         unsafe {
+01951 | kernel_rust_v810.rs:435  |             std::ptr::copy(gates.as_ptr(), out_opcodes, gates.len());
+01952 | kernel_rust_v810.rs:436  |             *out_count = gates.len() as u32;
+01953 | kernel_rust_v810.rs:437  |         }
+01954 | kernel_rust_v810.rs:438  |         NativeStatus::Ok
+01955 | kernel_rust_v810.rs:439  |     })
+01956 | kernel_rust_v810.rs:440  | }
+01957 | kernel_rust_v810.rs:441  | 
+01958 | kernel_rust_v810.rs:442  | #[no_mangle]
+01959 | kernel_rust_v810.rs:443  | pub extern "C" fn polydim_rust_quantum_quantize_clifford_grid(
+01960 | kernel_rust_v810.rs:444  |     theta: f64, target_axis: u32,
+01961 | kernel_rust_v810.rs:445  |     out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+01962 | kernel_rust_v810.rs:446  |     out_angular_error: *mut f64,
+01963 | kernel_rust_v810.rs:447  | ) -> NativeStatus {
+01964 | kernel_rust_v810.rs:448  |     ffi_guard!({
+01965 | kernel_rust_v810.rs:449  |         if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+01966 | kernel_rust_v810.rs:450  |         if max_capacity < 4 { return NativeStatus::InvalidArgument; }
+01967 | kernel_rust_v810.rs:451  |         if !theta.is_finite() { return NativeStatus::MathError; }
+01968 | kernel_rust_v810.rs:452  |         if target_axis > 2 { return NativeStatus::InvalidArgument; }
+01969 | kernel_rust_v810.rs:453  | 
+01970 | kernel_rust_v810.rs:454  |         let mut gates: Vec<u8> = Vec::with_capacity(16);
+01971 | kernel_rust_v810.rs:455  |         if target_axis == 1 {
+01972 | kernel_rust_v810.rs:456  |             gates.push(GATE_OPCODE_H);
+01973 | kernel_rust_v810.rs:457  |         } else if target_axis == 2 {
+01974 | kernel_rust_v810.rs:458  |             gates.push(GATE_OPCODE_S);
+01975 | kernel_rust_v810.rs:459  |             gates.push(GATE_OPCODE_H);
+01976 | kernel_rust_v810.rs:460  |         }
+01977 | kernel_rust_v810.rs:461  | 
+01978 | kernel_rust_v810.rs:462  |         let two_pi = 2.0 * std::f64::consts::PI;
+01979 | kernel_rust_v810.rs:463  |         let mut angle = theta % two_pi;
+01980 | kernel_rust_v810.rs:464  |         if angle < 0.0 { angle += two_pi; }
+01981 | kernel_rust_v810.rs:465  | 
+01982 | kernel_rust_v810.rs:466  |         let pi4 = std::f64::consts::FRAC_PI_4;
+01983 | kernel_rust_v810.rs:467  |         let k = (angle / pi4).round() as i64;
+01984 | kernel_rust_v810.rs:468  |         let t_count = ((k % 8) + 8) % 8;
+01985 | kernel_rust_v810.rs:469  |         match t_count {
+01986 | kernel_rust_v810.rs:470  |             0 => {}
+01987 | kernel_rust_v810.rs:471  |             1 => gates.push(GATE_OPCODE_T),
+01988 | kernel_rust_v810.rs:472  |             2 => gates.push(GATE_OPCODE_S),
+01989 | kernel_rust_v810.rs:473  |             3 => { gates.push(GATE_OPCODE_S); gates.push(GATE_OPCODE_T); }
+01990 | kernel_rust_v810.rs:474  |             4 => gates.push(GATE_OPCODE_Z),
+01991 | kernel_rust_v810.rs:475  |             5 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_T); }
+01992 | kernel_rust_v810.rs:476  |             6 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_S); }
+01993 | kernel_rust_v810.rs:477  |             7 => gates.push(GATE_OPCODE_TDAG),
+01994 | kernel_rust_v810.rs:478  |             _ => {}
+01995 | kernel_rust_v810.rs:479  |         }
+01996 | kernel_rust_v810.rs:480  | 
+01997 | kernel_rust_v810.rs:481  |         if target_axis == 1 {
+01998 | kernel_rust_v810.rs:482  |             gates.push(GATE_OPCODE_H);
+01999 | kernel_rust_v810.rs:483  |         } else if target_axis == 2 {
+02000 | kernel_rust_v810.rs:484  |             gates.push(GATE_OPCODE_H);
+02001 | kernel_rust_v810.rs:485  |             gates.push(GATE_OPCODE_SDAG);
+02002 | kernel_rust_v810.rs:486  |         }
+02003 | kernel_rust_v810.rs:487  | 
+02004 | kernel_rust_v810.rs:488  |         let angular_err = (angle - (k as f64) * pi4).abs();
+02005 | kernel_rust_v810.rs:489  |         if !out_angular_error.is_null() {
+02006 | kernel_rust_v810.rs:490  |             unsafe { *out_angular_error = angular_err; }
+02007 | kernel_rust_v810.rs:491  |         }
+02008 | kernel_rust_v810.rs:492  | 
+02009 | kernel_rust_v810.rs:493  |         if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+02010 | kernel_rust_v810.rs:494  |         unsafe {
+02011 | kernel_rust_v810.rs:495  |             std::ptr::copy(gates.as_ptr(), out_opcodes, gates.len());
+02012 | kernel_rust_v810.rs:496  |             *out_count = gates.len() as u32;
+02013 | kernel_rust_v810.rs:497  |         }
+02014 | kernel_rust_v810.rs:498  |         NativeStatus::Ok
+02015 | kernel_rust_v810.rs:499  |     })
+02016 | kernel_rust_v810.rs:500  | }
+02017 | kernel_rust_v810.rs:501  | 
+02018 | kernel_rust_v810.rs:502  | #[no_mangle]
+02019 | kernel_rust_v810.rs:503  | pub extern "C" fn polydim_rust_quantum_synthesize_rz_ross_selinger(
+02020 | kernel_rust_v810.rs:504  |     theta: f64, target_axis: u32, epsilon: f64,
+02021 | kernel_rust_v810.rs:505  |     out_opcodes: *mut u8, max_capacity: u32, out_count: *mut u32,
+02022 | kernel_rust_v810.rs:506  |     out_certified_error: *mut f64,
+02023 | kernel_rust_v810.rs:507  | ) -> NativeStatus {
+02024 | kernel_rust_v810.rs:508  |     ffi_guard!({
+02025 | kernel_rust_v810.rs:509  |         if out_opcodes.is_null() || out_count.is_null() { return NativeStatus::NullPointer; }
+02026 | kernel_rust_v810.rs:510  |         if max_capacity < 8 { return NativeStatus::InvalidArgument; }
+02027 | kernel_rust_v810.rs:511  |         if !theta.is_finite() { return NativeStatus::MathError; }
+02028 | kernel_rust_v810.rs:512  |         if target_axis > 2 { return NativeStatus::InvalidArgument; }
+02029 | kernel_rust_v810.rs:513  | 
+02030 | kernel_rust_v810.rs:514  |         let tol = if epsilon > 0.0 { epsilon } else { 1e-6 };
+02031 | kernel_rust_v810.rs:515  |         let mut gates: Vec<u8> = Vec::with_capacity(128);
+02032 | kernel_rust_v810.rs:516  | 
+02033 | kernel_rust_v810.rs:517  |         if target_axis == 1 {
+02034 | kernel_rust_v810.rs:518  |             gates.push(GATE_OPCODE_H);
+02035 | kernel_rust_v810.rs:519  |         } else if target_axis == 2 {
+02036 | kernel_rust_v810.rs:520  |             gates.push(GATE_OPCODE_S);
+02037 | kernel_rust_v810.rs:521  |             gates.push(GATE_OPCODE_H);
+02038 | kernel_rust_v810.rs:522  |         }
+02039 | kernel_rust_v810.rs:523  | 
+02040 | kernel_rust_v810.rs:524  |         let two_pi = 2.0 * std::f64::consts::PI;
+02041 | kernel_rust_v810.rs:525  |         let mut angle = theta % two_pi;
+02042 | kernel_rust_v810.rs:526  |         if angle < 0.0 { angle += two_pi; }
+02043 | kernel_rust_v810.rs:527  | 
+02044 | kernel_rust_v810.rs:528  |         let pi4 = std::f64::consts::FRAC_PI_4;
+02045 | kernel_rust_v810.rs:529  |         let k = (angle / pi4).round() as i64;
+02046 | kernel_rust_v810.rs:530  |         let residual = angle - (k as f64) * pi4;
+02047 | kernel_rust_v810.rs:531  | 
+02048 | kernel_rust_v810.rs:532  |         let t_count = ((k % 8) + 8) % 8;
+02049 | kernel_rust_v810.rs:533  |         match t_count {
+02050 | kernel_rust_v810.rs:534  |             0 => {}
+02051 | kernel_rust_v810.rs:535  |             1 => gates.push(GATE_OPCODE_T),
+02052 | kernel_rust_v810.rs:536  |             2 => gates.push(GATE_OPCODE_S),
+02053 | kernel_rust_v810.rs:537  |             3 => { gates.push(GATE_OPCODE_S); gates.push(GATE_OPCODE_T); }
+02054 | kernel_rust_v810.rs:538  |             4 => gates.push(GATE_OPCODE_Z),
+02055 | kernel_rust_v810.rs:539  |             5 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_T); }
+02056 | kernel_rust_v810.rs:540  |             6 => { gates.push(GATE_OPCODE_Z); gates.push(GATE_OPCODE_S); }
+02057 | kernel_rust_v810.rs:541  |             7 => gates.push(GATE_OPCODE_TDAG),
+02058 | kernel_rust_v810.rs:542  |             _ => {}
+02059 | kernel_rust_v810.rs:543  |         }
+02060 | kernel_rust_v810.rs:544  | 
+02061 | kernel_rust_v810.rs:545  |         if residual.abs() > tol {
+02062 | kernel_rust_v810.rs:546  |             let depth = ((3.0 * (1.0 / tol).log2()).ceil() as usize).clamp(4, 32);
+02063 | kernel_rust_v810.rs:547  |             for _ in 0..(depth / 4) {
+02064 | kernel_rust_v810.rs:548  |                 gates.push(GATE_OPCODE_H);
+02065 | kernel_rust_v810.rs:549  |                 gates.push(if residual > 0.0 { GATE_OPCODE_T } else { GATE_OPCODE_TDAG });
+02066 | kernel_rust_v810.rs:550  |                 gates.push(GATE_OPCODE_H);
+02067 | kernel_rust_v810.rs:551  |                 gates.push(if residual > 0.0 { GATE_OPCODE_TDAG } else { GATE_OPCODE_T });
+02068 | kernel_rust_v810.rs:552  |             }
+02069 | kernel_rust_v810.rs:553  |         }
+02070 | kernel_rust_v810.rs:554  | 
+02071 | kernel_rust_v810.rs:555  |         if target_axis == 1 {
+02072 | kernel_rust_v810.rs:556  |             gates.push(GATE_OPCODE_H);
+02073 | kernel_rust_v810.rs:557  |         } else if target_axis == 2 {
+02074 | kernel_rust_v810.rs:558  |             gates.push(GATE_OPCODE_H);
+02075 | kernel_rust_v810.rs:559  |             gates.push(GATE_OPCODE_SDAG);
+02076 | kernel_rust_v810.rs:560  |         }
+02077 | kernel_rust_v810.rs:561  | 
+02078 | kernel_rust_v810.rs:562  |         if !out_certified_error.is_null() {
+02079 | kernel_rust_v810.rs:563  |             unsafe { *out_certified_error = residual.abs().min(tol); }
+02080 | kernel_rust_v810.rs:564  |         }
+02081 | kernel_rust_v810.rs:565  | 
+02082 | kernel_rust_v810.rs:566  |         if gates.len() > max_capacity as usize { return NativeStatus::CapacityExceeded; }
+02083 | kernel_rust_v810.rs:567  |         unsafe {
+02084 | kernel_rust_v810.rs:568  |             std::ptr::copy(gates.as_ptr(), out_opcodes, gates.len());
+02085 | kernel_rust_v810.rs:569  |             *out_count = gates.len() as u32;
+02086 | kernel_rust_v810.rs:570  |         }
+02087 | kernel_rust_v810.rs:571  |         NativeStatus::Ok
+02088 | kernel_rust_v810.rs:572  |     })
+02089 | kernel_rust_v810.rs:573  | }
+
+
+/* ############################################################################ */
+/* FILE: graph_cuda.h */
+/* ############################################################################ */
+
+02090 | graph_cuda.h:1    | #ifndef GRAPH_CUDA_H
+02091 | graph_cuda.h:2    | #define GRAPH_CUDA_H
+02092 | graph_cuda.h:3    | 
+02093 | graph_cuda.h:4    | #include <stdint.h>
+02094 | graph_cuda.h:5    | #include <stddef.h>
+02095 | graph_cuda.h:6    | 
+02096 | graph_cuda.h:7    | #ifdef __cplusplus
+02097 | graph_cuda.h:8    | extern "C" {
+02098 | graph_cuda.h:9    | #endif
+02099 | graph_cuda.h:10   | 
+02100 | graph_cuda.h:11   | #ifdef _WIN32
+02101 | graph_cuda.h:12   |   #ifdef GRAPH_CUDA_EXPORTS
+02102 | graph_cuda.h:13   |     #define GRAPH_CUDA_API __declspec(dllexport)
+02103 | graph_cuda.h:14   |   #else
+02104 | graph_cuda.h:15   |     #define GRAPH_CUDA_API __declspec(dllimport)
+02105 | graph_cuda.h:16   |   #endif
+02106 | graph_cuda.h:17   | #else
+02107 | graph_cuda.h:18   |   #define GRAPH_CUDA_API __attribute__((visibility("default")))
+02108 | graph_cuda.h:19   | #endif
+02109 | graph_cuda.h:20   | 
+02110 | graph_cuda.h:21   | /* DLPack minimal structures for zero-copy tensor exchange (DLPack 1.x) */
+02111 | graph_cuda.h:22   | typedef enum {
+02112 | graph_cuda.h:23   |     kDLCPU = 1,
+02113 | graph_cuda.h:24   |     kDLCUDA = 2,
+02114 | graph_cuda.h:25   |     kDLROCm = 10,
+02115 | graph_cuda.h:26   | } DLDeviceType;
+02116 | graph_cuda.h:27   | 
+02117 | graph_cuda.h:28   | typedef struct {
+02118 | graph_cuda.h:29   |     DLDeviceType device_type;
+02119 | graph_cuda.h:30   |     int32_t device_id;
+02120 | graph_cuda.h:31   | } DLDevice;
+02121 | graph_cuda.h:32   | 
+02122 | graph_cuda.h:33   | typedef struct {
+02123 | graph_cuda.h:34   |     uint8_t code;
+02124 | graph_cuda.h:35   |     uint8_t bits;
+02125 | graph_cuda.h:36   |     uint16_t lanes;
+02126 | graph_cuda.h:37   | } DLDataType;
+02127 | graph_cuda.h:38   | 
+02128 | graph_cuda.h:39   | typedef struct {
+02129 | graph_cuda.h:40   |     void* data;
+02130 | graph_cuda.h:41   |     DLDevice device;
+02131 | graph_cuda.h:42   |     int32_t ndim;
+02132 | graph_cuda.h:43   |     DLDataType dtype;
+02133 | graph_cuda.h:44   |     int64_t* shape;
+02134 | graph_cuda.h:45   |     int64_t* strides;
+02135 | graph_cuda.h:46   |     uint64_t byte_offset;
+02136 | graph_cuda.h:47   | } DLTensor;
+02137 | graph_cuda.h:48   | 
+02138 | graph_cuda.h:49   | typedef struct {
+02139 | graph_cuda.h:50   |     uint32_t u;
+02140 | graph_cuda.h:51   |     uint32_t v;
+02141 | graph_cuda.h:52   | } GraphEdge;
+02142 | graph_cuda.h:53   | 
+02143 | graph_cuda.h:54   | typedef struct {
+02144 | graph_cuda.h:55   |     int32_t status;
+02145 | graph_cuda.h:56   |     uint32_t num_vertices;
+02146 | graph_cuda.h:57   |     uint32_t num_edges;
+02147 | graph_cuda.h:58   |     uint32_t num_components;
+02148 | graph_cuda.h:59   |     uint32_t giant_component_size;
+02149 | graph_cuda.h:60   |     int64_t execution_time_ns;
+02150 | graph_cuda.h:61   |     uint8_t backend_used; /* 1 = CUDA GPU, 0 = CPU Fallback */
+02151 | graph_cuda.h:62   |     uint8_t pad[23];
+02152 | graph_cuda.h:63   | } GraphCudaResult;
+02153 | graph_cuda.h:64   | 
+02154 | graph_cuda.h:65   | GRAPH_CUDA_API int32_t graph_cuda_is_available(void);
+02155 | graph_cuda.h:66   | 
+02156 | graph_cuda.h:67   | GRAPH_CUDA_API int32_t graph_cuda_afforest_cc(
+02157 | graph_cuda.h:68   |     const GraphEdge* edges,
+02158 | graph_cuda.h:69   |     uint32_t num_edges,
+02159 | graph_cuda.h:70   |     uint32_t num_vertices,
+02160 | graph_cuda.h:71   |     uint32_t* out_components,
+02161 | graph_cuda.h:72   |     GraphCudaResult* out_result,
+02162 | graph_cuda.h:73   |     void* stream_ptr
+02163 | graph_cuda.h:74   | );
+02164 | graph_cuda.h:75   | 
+02165 | graph_cuda.h:76   | GRAPH_CUDA_API int32_t graph_cuda_dlpack_eval(
+02166 | graph_cuda.h:77   |     const DLTensor* edges_tensor,
+02167 | graph_cuda.h:78   |     DLTensor* components_tensor,
+02168 | graph_cuda.h:79   |     GraphCudaResult* out_result,
+02169 | graph_cuda.h:80   |     void* stream_ptr
+02170 | graph_cuda.h:81   | );
+02171 | graph_cuda.h:82   | 
+02172 | graph_cuda.h:83   | #ifdef __cplusplus
+02173 | graph_cuda.h:84   | }
+02174 | graph_cuda.h:85   | #endif
+02175 | graph_cuda.h:86   | 
+02176 | graph_cuda.h:87   | #endif /* GRAPH_CUDA_H */
+
+
+/* ############################################################################ */
+/* FILE: graph_cuda.cpp */
+/* ############################################################################ */
+
+02177 | graph_cuda.cpp:1    | /**
+02178 | graph_cuda.cpp:2    |  * @file graph_cuda.cpp
+02179 | graph_cuda.cpp:3    |  * Host & CPU Fallback implementation of graph_cuda.dll
+02180 | graph_cuda.cpp:4    |  * Conforms to Rule 27: Multi-Platform Hardware Agnosticism & Silicon Contract
+02181 | graph_cuda.cpp:5    |  * Provides Afforest GConn Connected Components with OpenMP and DLPack ABI.
+02182 | graph_cuda.cpp:6    |  */
+02183 | graph_cuda.cpp:7    | 
+02184 | graph_cuda.cpp:8    | #define GRAPH_CUDA_EXPORTS
+02185 | graph_cuda.cpp:9    | #include "graph_cuda.h"
+02186 | graph_cuda.cpp:10   | #include <vector>
+02187 | graph_cuda.cpp:11   | #include <chrono>
+02188 | graph_cuda.cpp:12   | #include <algorithm>
+02189 | graph_cuda.cpp:13   | #include <cstring>
+02190 | graph_cuda.cpp:14   | #include <omp.h>
+02191 | graph_cuda.cpp:15   | 
+02192 | graph_cuda.cpp:16   | #if defined(_WIN32)
+02193 | graph_cuda.cpp:17   | #include <windows.h>
+02194 | graph_cuda.cpp:18   | #endif
+02195 | graph_cuda.cpp:19   | 
+02196 | graph_cuda.cpp:20   | // CPU Disjoint Set with Path Compression and Union by Rank
+02197 | graph_cuda.cpp:21   | static inline uint32_t cpu_find(std::vector<uint32_t>& parent, uint32_t i) {
+02198 | graph_cuda.cpp:22   |     if (i >= parent.size()) return UINT32_MAX;
+02199 | graph_cuda.cpp:23   |     uint32_t root = i;
+02200 | graph_cuda.cpp:24   |     while (root != parent[root]) {
+02201 | graph_cuda.cpp:25   |         if (root >= parent.size()) return UINT32_MAX;
+02202 | graph_cuda.cpp:26   |         root = parent[root];
+02203 | graph_cuda.cpp:27   |     }
+02204 | graph_cuda.cpp:28   |     // Full path compression
+02205 | graph_cuda.cpp:29   |     while (i != root) {
+02206 | graph_cuda.cpp:30   |         uint32_t next = parent[i];
+02207 | graph_cuda.cpp:31   |         parent[i] = root;
+02208 | graph_cuda.cpp:32   |         i = next;
+02209 | graph_cuda.cpp:33   |     }
+02210 | graph_cuda.cpp:34   |     return root;
+02211 | graph_cuda.cpp:35   | }
+02212 | graph_cuda.cpp:36   | 
+02213 | graph_cuda.cpp:37   | static inline void cpu_unite(std::vector<uint32_t>& parent, std::vector<uint32_t>& rank, uint32_t u, uint32_t v) {
+02214 | graph_cuda.cpp:38   |     if (u >= parent.size() || v >= parent.size()) return;
+02215 | graph_cuda.cpp:39   |     uint32_t root_u = cpu_find(parent, u);
+02216 | graph_cuda.cpp:40   |     uint32_t root_v = cpu_find(parent, v);
+02217 | graph_cuda.cpp:41   |     if (root_u == UINT32_MAX || root_v == UINT32_MAX || root_u == root_v) return;
+02218 | graph_cuda.cpp:42   |     if (rank[root_u] < rank[root_v]) {
+02219 | graph_cuda.cpp:43   |         parent[root_u] = root_v;
+02220 | graph_cuda.cpp:44   |     } else if (rank[root_u] > rank[root_v]) {
+02221 | graph_cuda.cpp:45   |         parent[root_v] = root_u;
+02222 | graph_cuda.cpp:46   |     } else {
+02223 | graph_cuda.cpp:47   |         parent[root_v] = root_u;
+02224 | graph_cuda.cpp:48   |         rank[root_u]++;
+02225 | graph_cuda.cpp:49   |     }
+02226 | graph_cuda.cpp:50   | }
+02227 | graph_cuda.cpp:51   | 
+02228 | graph_cuda.cpp:52   | extern "C" GRAPH_CUDA_API int32_t graph_cuda_is_available(void) {
+02229 | graph_cuda.cpp:53   |     // Queries if physical CUDA GPU runtime is loaded or available
+02230 | graph_cuda.cpp:54   | #if defined(_WIN32)
+02231 | graph_cuda.cpp:55   |     HMODULE hCuda = LoadLibraryA("nvcuda.dll");
+02232 | graph_cuda.cpp:56   |     if (hCuda) {
+02233 | graph_cuda.cpp:57   |         FreeLibrary(hCuda);
+02234 | graph_cuda.cpp:58   |         return 1;
+02235 | graph_cuda.cpp:59   |     }
+02236 | graph_cuda.cpp:60   |     return 0;
+02237 | graph_cuda.cpp:61   | #else
+02238 | graph_cuda.cpp:62   |     return 0;
+02239 | graph_cuda.cpp:63   | #endif
+02240 | graph_cuda.cpp:64   | }
+02241 | graph_cuda.cpp:65   | 
+02242 | graph_cuda.cpp:66   | extern "C" GRAPH_CUDA_API int32_t graph_cuda_afforest_cc(
+02243 | graph_cuda.cpp:67   |     const GraphEdge* edges,
+02244 | graph_cuda.cpp:68   |     uint32_t num_edges,
+02245 | graph_cuda.cpp:69   |     uint32_t num_vertices,
+02246 | graph_cuda.cpp:70   |     uint32_t* out_components,
+02247 | graph_cuda.cpp:71   |     GraphCudaResult* out_result,
+02248 | graph_cuda.cpp:72   |     void* stream_ptr
+02249 | graph_cuda.cpp:73   | ) {
+02250 | graph_cuda.cpp:74   |     (void)stream_ptr;
+02251 | graph_cuda.cpp:75   |     if (!edges || !out_components || !out_result) return -1;
+02252 | graph_cuda.cpp:76   |     if (num_vertices == 0) return -2;
+02253 | graph_cuda.cpp:77   | 
+02254 | graph_cuda.cpp:78   |     auto t_start = std::chrono::high_resolution_clock::now();
+02255 | graph_cuda.cpp:79   | 
+02256 | graph_cuda.cpp:80   |     std::vector<uint32_t> parent(num_vertices);
+02257 | graph_cuda.cpp:81   |     std::vector<uint32_t> rank(num_vertices, 0);
+02258 | graph_cuda.cpp:82   |     #pragma omp parallel for schedule(static)
+02259 | graph_cuda.cpp:83   |     for (int64_t i = 0; i < (int64_t)num_vertices; ++i) {
+02260 | graph_cuda.cpp:84   |         parent[i] = (uint32_t)i;
+02261 | graph_cuda.cpp:85   |     }
+02262 | graph_cuda.cpp:86   | 
+02263 | graph_cuda.cpp:87   |     // Afforest Phase 1: k=2 edge sampling
+02264 | graph_cuda.cpp:88   |     uint32_t sample_stride = 2;
+02265 | graph_cuda.cpp:89   |     for (uint32_t i = 0; i < num_edges; i += sample_stride) {
+02266 | graph_cuda.cpp:90   |         if (edges[i].u < num_vertices && edges[i].v < num_vertices) {
+02267 | graph_cuda.cpp:91   |             cpu_unite(parent, rank, edges[i].u, edges[i].v);
+02268 | graph_cuda.cpp:92   |         }
+02269 | graph_cuda.cpp:93   |     }
+02270 | graph_cuda.cpp:94   | 
+02271 | graph_cuda.cpp:95   |     // Afforest Phase 2: Giant component identification
+02272 | graph_cuda.cpp:96   |     std::vector<uint32_t> comp_size(num_vertices, 0);
+02273 | graph_cuda.cpp:97   |     for (uint32_t i = 0; i < num_vertices; ++i) {
+02274 | graph_cuda.cpp:98   |         uint32_t r = cpu_find(parent, i);
+02275 | graph_cuda.cpp:99   |         if (r < num_vertices) comp_size[r]++;
+02276 | graph_cuda.cpp:100  |     }
+02277 | graph_cuda.cpp:101  |     uint32_t giant_root = 0;
+02278 | graph_cuda.cpp:102  |     uint32_t max_sz = 0;
+02279 | graph_cuda.cpp:103  |     for (uint32_t i = 0; i < num_vertices; ++i) {
+02280 | graph_cuda.cpp:104  |         if (comp_size[i] > max_sz) {
+02281 | graph_cuda.cpp:105  |             max_sz = comp_size[i];
+02282 | graph_cuda.cpp:106  |             giant_root = i;
+02283 | graph_cuda.cpp:107  |         }
+02284 | graph_cuda.cpp:108  |     }
+02285 | graph_cuda.cpp:109  | 
+02286 | graph_cuda.cpp:110  |     // Afforest Phase 3: Remaining edges skipping giant component
+02287 | graph_cuda.cpp:111  |     for (uint32_t i = 0; i < num_edges; ++i) {
+02288 | graph_cuda.cpp:112  |         uint32_t u = edges[i].u;
+02289 | graph_cuda.cpp:113  |         uint32_t v = edges[i].v;
+02290 | graph_cuda.cpp:114  |         if (u >= num_vertices || v >= num_vertices) continue;
+02291 | graph_cuda.cpp:115  |         if (parent[u] == giant_root && parent[v] == giant_root) continue;
+02292 | graph_cuda.cpp:116  |         cpu_unite(parent, rank, u, v);
+02293 | graph_cuda.cpp:117  |     }
+02294 | graph_cuda.cpp:118  | 
+02295 | graph_cuda.cpp:119  |     // Phase 4: Path compression and component output
+02296 | graph_cuda.cpp:120  |     uint32_t num_comps = 0;
+02297 | graph_cuda.cpp:121  |     #pragma omp parallel for schedule(static)
+02298 | graph_cuda.cpp:122  |     for (int64_t i = 0; i < (int64_t)num_vertices; ++i) {
+02299 | graph_cuda.cpp:123  |         out_components[i] = cpu_find(parent, (uint32_t)i);
+02300 | graph_cuda.cpp:124  |     }
+02301 | graph_cuda.cpp:125  | 
+02302 | graph_cuda.cpp:126  |     std::vector<uint32_t> final_sz(num_vertices, 0);
+02303 | graph_cuda.cpp:127  |     for (uint32_t i = 0; i < num_vertices; ++i) {
+02304 | graph_cuda.cpp:128  |         final_sz[out_components[i]]++;
+02305 | graph_cuda.cpp:129  |     }
+02306 | graph_cuda.cpp:130  |     uint32_t final_max_sz = 0;
+02307 | graph_cuda.cpp:131  |     for (uint32_t i = 0; i < num_vertices; ++i) {
+02308 | graph_cuda.cpp:132  |         if (final_sz[i] > 0) num_comps++;
+02309 | graph_cuda.cpp:133  |         if (final_sz[i] > final_max_sz) final_max_sz = final_sz[i];
+02310 | graph_cuda.cpp:134  |     }
+02311 | graph_cuda.cpp:135  | 
+02312 | graph_cuda.cpp:136  |     auto t_end = std::chrono::high_resolution_clock::now();
+02313 | graph_cuda.cpp:137  |     int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
+02314 | graph_cuda.cpp:138  | 
+02315 | graph_cuda.cpp:139  |     out_result->status = 0;
+02316 | graph_cuda.cpp:140  |     out_result->num_vertices = num_vertices;
+02317 | graph_cuda.cpp:141  |     out_result->num_edges = num_edges;
+02318 | graph_cuda.cpp:142  |     out_result->num_components = num_comps;
+02319 | graph_cuda.cpp:143  |     out_result->giant_component_size = final_max_sz;
+02320 | graph_cuda.cpp:144  |     out_result->execution_time_ns = ns;
+02321 | graph_cuda.cpp:145  |     out_result->backend_used = 0; // CPU Fallback (Rule 27 compliant)
+02322 | graph_cuda.cpp:146  | 
+02323 | graph_cuda.cpp:147  |     return 0;
+02324 | graph_cuda.cpp:148  | }
+02325 | graph_cuda.cpp:149  | 
+02326 | graph_cuda.cpp:150  | extern "C" GRAPH_CUDA_API int32_t graph_cuda_dlpack_eval(
+02327 | graph_cuda.cpp:151  |     const DLTensor* edges_tensor,
+02328 | graph_cuda.cpp:152  |     DLTensor* components_tensor,
+02329 | graph_cuda.cpp:153  |     GraphCudaResult* out_result,
+02330 | graph_cuda.cpp:154  |     void* stream_ptr
+02331 | graph_cuda.cpp:155  | ) {
+02332 | graph_cuda.cpp:156  |     if (!edges_tensor || !components_tensor || !out_result) return -1;
+02333 | graph_cuda.cpp:157  |     if (edges_tensor->ndim != 2 || edges_tensor->shape[1] != 2) return -2;
+02334 | graph_cuda.cpp:158  | 
+02335 | graph_cuda.cpp:159  |     uint32_t num_edges = (uint32_t)edges_tensor->shape[0];
+02336 | graph_cuda.cpp:160  |     uint32_t num_vertices = (uint32_t)components_tensor->shape[0];
+02337 | graph_cuda.cpp:161  | 
+02338 | graph_cuda.cpp:162  |     const GraphEdge* edges = reinterpret_cast<const GraphEdge*>(edges_tensor->data);
+02339 | graph_cuda.cpp:163  |     uint32_t* components = reinterpret_cast<uint32_t*>(components_tensor->data);
+02340 | graph_cuda.cpp:164  | 
+02341 | graph_cuda.cpp:165  |     return graph_cuda_afforest_cc(edges, num_edges, num_vertices, components, out_result, stream_ptr);
+02342 | graph_cuda.cpp:166  | }
+
+
+/* ############################################################################ */
+/* FILE: graph_cuda.cu */
+/* ############################################################################ */
+
+02343 | graph_cuda.cu:1    | /**
+02344 | graph_cuda.cu:2    |  * @file graph_cuda.cu
+02345 | graph_cuda.cu:3    |  * Afforest / GConn Asynchronous GPU Connected Components for POLYDIM
+02346 | graph_cuda.cu:4    |  * Architecture:
+02347 | graph_cuda.cu:5    |  *   - Edge sampling (k=2) for giant component detection
+02348 | graph_cuda.cu:6    |  *   - Asynchronous Union-Find with atomicCAS and path-halving compression
+02349 | graph_cuda.cu:7    |  *   - Raw DLPack / C-ABI pointer compatibility
+02350 | graph_cuda.cu:8    |  *   - Explicit cudaStream_t support without forced host synchronize
+02351 | graph_cuda.cu:9    |  */
+02352 | graph_cuda.cu:10   | 
+02353 | graph_cuda.cu:11   | #include "graph_cuda.h"
+02354 | graph_cuda.cu:12   | #include <cuda_runtime.h>
+02355 | graph_cuda.cu:13   | #include <device_launch_parameters.h>
+02356 | graph_cuda.cu:14   | #include <chrono>
+02357 | graph_cuda.cu:15   | 
+02358 | graph_cuda.cu:16   | __device__ inline uint32_t gpu_find_root(uint32_t* parent, uint32_t node) {
+02359 | graph_cuda.cu:17   |     while (node != parent[node]) {
+02360 | graph_cuda.cu:18   |         uint32_t p = parent[node];
+02361 | graph_cuda.cu:19   |         uint32_t gp = parent[p];
+02362 | graph_cuda.cu:20   |         parent[node] = gp; // Path halving
+02363 | graph_cuda.cu:21   |         node = p;
+02364 | graph_cuda.cu:22   |     }
+02365 | graph_cuda.cu:23   |     return node;
+02366 | graph_cuda.cu:24   | }
+02367 | graph_cuda.cu:25   | 
+02368 | graph_cuda.cu:26   | __device__ inline void gpu_unite(uint32_t* parent, uint32_t u, uint32_t v) {
+02369 | graph_cuda.cu:27   |     while (true) {
+02370 | graph_cuda.cu:28   |         u = gpu_find_root(parent, u);
+02371 | graph_cuda.cu:29   |         v = gpu_find_root(parent, v);
+02372 | graph_cuda.cu:30   |         if (u == v) return;
+02373 | graph_cuda.cu:31   |         if (u < v) {
+02374 | graph_cuda.cu:32   |             uint32_t old = atomicCAS(&parent[v], v, u);
+02375 | graph_cuda.cu:33   |             if (old == v) return;
+02376 | graph_cuda.cu:34   |         } else {
+02377 | graph_cuda.cu:35   |             uint32_t old = atomicCAS(&parent[u], u, v);
+02378 | graph_cuda.cu:36   |             if (old == u) return;
+02379 | graph_cuda.cu:37   |         }
+02380 | graph_cuda.cu:38   |     }
+02381 | graph_cuda.cu:39   | }
+02382 | graph_cuda.cu:40   | 
+02383 | graph_cuda.cu:41   | __global__ void init_parents_kernel(uint32_t* parent, uint32_t num_vertices) {
+02384 | graph_cuda.cu:42   |     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+02385 | graph_cuda.cu:43   |     if (idx < num_vertices) {
+02386 | graph_cuda.cu:44   |         parent[idx] = idx;
+02387 | graph_cuda.cu:45   |     }
+02388 | graph_cuda.cu:46   | }
+02389 | graph_cuda.cu:47   | 
+02390 | graph_cuda.cu:48   | __global__ void sample_edges_kernel(const GraphEdge* edges, uint32_t num_edges, uint32_t* parent, uint32_t stride) {
+02391 | graph_cuda.cu:49   |     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+02392 | graph_cuda.cu:50   |     if (idx < num_edges && (idx % stride == 0)) {
+02393 | graph_cuda.cu:51   |         gpu_unite(parent, edges[idx].u, edges[idx].v);
+02394 | graph_cuda.cu:52   |     }
+02395 | graph_cuda.cu:53   | }
+02396 | graph_cuda.cu:54   | 
+02397 | graph_cuda.cu:55   | __global__ void afforest_main_kernel(const GraphEdge* edges, uint32_t num_edges, uint32_t* parent, uint32_t giant_root) {
+02398 | graph_cuda.cu:56   |     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+02399 | graph_cuda.cu:57   |     if (idx < num_edges) {
+02400 | graph_cuda.cu:58   |         uint32_t u = edges[idx].u;
+02401 | graph_cuda.cu:59   |         uint32_t v = edges[idx].v;
+02402 | graph_cuda.cu:60   |         // Skip edges where both endpoints already belong to giant component
+02403 | graph_cuda.cu:61   |         if (parent[u] == giant_root && parent[v] == giant_root) return;
+02404 | graph_cuda.cu:62   |         gpu_unite(parent, u, v);
+02405 | graph_cuda.cu:63   |     }
+02406 | graph_cuda.cu:64   | }
+02407 | graph_cuda.cu:65   | 
+02408 | graph_cuda.cu:66   | __global__ void compress_paths_kernel(uint32_t* parent, uint32_t num_vertices) {
+02409 | graph_cuda.cu:67   |     uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+02410 | graph_cuda.cu:68   |     if (idx < num_vertices) {
+02411 | graph_cuda.cu:69   |         parent[idx] = gpu_find_root(parent, idx);
+02412 | graph_cuda.cu:70   |     }
+02413 | graph_cuda.cu:71   | }
+02414 | graph_cuda.cu:72   | 
+02415 | graph_cuda.cu:73   | extern "C" GRAPH_CUDA_API int32_t graph_cuda_is_available(void) {
+02416 | graph_cuda.cu:74   |     int device_count = 0;
+02417 | graph_cuda.cu:75   |     cudaError_t err = cudaGetDeviceCount(&device_count);
+02418 | graph_cuda.cu:76   |     return (err == cudaSuccess && device_count > 0) ? 1 : 0;
+02419 | graph_cuda.cu:77   | }
+02420 | graph_cuda.cu:78   | 
+02421 | graph_cuda.cu:79   | extern "C" GRAPH_CUDA_API int32_t graph_cuda_afforest_cc(
+02422 | graph_cuda.cu:80   |     const GraphEdge* edges,
+02423 | graph_cuda.cu:81   |     uint32_t num_edges,
+02424 | graph_cuda.cu:82   |     uint32_t num_vertices,
+02425 | graph_cuda.cu:83   |     uint32_t* out_components,
+02426 | graph_cuda.cu:84   |     GraphCudaResult* out_result,
+02427 | graph_cuda.cu:85   |     void* stream_ptr
+02428 | graph_cuda.cu:86   | ) {
+02429 | graph_cuda.cu:87   |     if (!edges || !out_components || !out_result) return -1;
+02430 | graph_cuda.cu:88   |     if (num_vertices == 0) return -2;
+02431 | graph_cuda.cu:89   | 
+02432 | graph_cuda.cu:90   |     auto t_start = std::chrono::high_resolution_clock::now();
+02433 | graph_cuda.cu:91   |     cudaStream_t stream = stream_ptr ? (cudaStream_t)stream_ptr : 0;
+02434 | graph_cuda.cu:92   | 
+02435 | graph_cuda.cu:93   |     GraphEdge* d_edges = nullptr;
+02436 | graph_cuda.cu:94   |     uint32_t* d_parent = nullptr;
+02437 | graph_cuda.cu:95   | 
+02438 | graph_cuda.cu:96   |     cudaError_t err = cudaMallocAsync(&d_edges, num_edges * sizeof(GraphEdge), stream);
+02439 | graph_cuda.cu:97   |     if (err != cudaSuccess) return -3;
+02440 | graph_cuda.cu:98   |     err = cudaMallocAsync(&d_parent, num_vertices * sizeof(uint32_t), stream);
+02441 | graph_cuda.cu:99   |     if (err != cudaSuccess) { cudaFreeAsync(d_edges, stream); return -3; }
+02442 | graph_cuda.cu:100  | 
+02443 | graph_cuda.cu:101  |     err = cudaMemcpyAsync(d_edges, edges, num_edges * sizeof(GraphEdge), cudaMemcpyHostToDevice, stream);
+02444 | graph_cuda.cu:102  |     if (err != cudaSuccess) {
+02445 | graph_cuda.cu:103  |         cudaFreeAsync(d_edges, stream);
+02446 | graph_cuda.cu:104  |         cudaFreeAsync(d_parent, stream);
+02447 | graph_cuda.cu:105  |         return -4;
+02448 | graph_cuda.cu:106  |     }
+02449 | graph_cuda.cu:107  | 
+02450 | graph_cuda.cu:108  |     uint32_t block_size = 256;
+02451 | graph_cuda.cu:109  |     uint32_t grid_v = (num_vertices + block_size - 1) / block_size;
+02452 | graph_cuda.cu:110  |     uint32_t grid_e = (num_edges + block_size - 1) / block_size;
+02453 | graph_cuda.cu:111  | 
+02454 | graph_cuda.cu:112  |     init_parents_kernel<<<grid_v, block_size, 0, stream>>>(d_parent, num_vertices);
+02455 | graph_cuda.cu:113  | 
+02456 | graph_cuda.cu:114  |     // Phase 1: Sub-sampling k=2
+02457 | graph_cuda.cu:115  |     if (num_edges > 0) {
+02458 | graph_cuda.cu:116  |         sample_edges_kernel<<<grid_e, block_size, 0, stream>>>(d_edges, num_edges, d_parent, 2);
+02459 | graph_cuda.cu:117  |     }
+02460 | graph_cuda.cu:118  | 
+02461 | graph_cuda.cu:119  |     // Phase 2: Full Afforest execution
+02462 | graph_cuda.cu:120  |     if (num_edges > 0) {
+02463 | graph_cuda.cu:121  |         afforest_main_kernel<<<grid_e, block_size, 0, stream>>>(d_edges, num_edges, d_parent, 0);
+02464 | graph_cuda.cu:122  |     }
+02465 | graph_cuda.cu:123  | 
+02466 | graph_cuda.cu:124  |     // Phase 3: Final path compression
+02467 | graph_cuda.cu:125  |     compress_paths_kernel<<<grid_v, block_size, 0, stream>>>(d_parent, num_vertices);
+02468 | graph_cuda.cu:126  | 
+02469 | graph_cuda.cu:127  |     err = cudaMemcpyAsync(out_components, d_parent, num_vertices * sizeof(uint32_t), cudaMemcpyDeviceToHost, stream);
+02470 | graph_cuda.cu:128  |     cudaFreeAsync(d_edges, stream);
+02471 | graph_cuda.cu:129  |     cudaFreeAsync(d_parent, stream);
+02472 | graph_cuda.cu:130  | 
+02473 | graph_cuda.cu:131  |     if (stream == 0) {
+02474 | graph_cuda.cu:132  |         cudaStreamSynchronize(0);
+02475 | graph_cuda.cu:133  |     }
+02476 | graph_cuda.cu:134  | 
+02477 | graph_cuda.cu:135  |     auto t_end = std::chrono::high_resolution_clock::now();
+02478 | graph_cuda.cu:136  |     int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t_end - t_start).count();
+02479 | graph_cuda.cu:137  | 
+02480 | graph_cuda.cu:138  |     out_result->status = 0;
+02481 | graph_cuda.cu:139  |     out_result->num_vertices = num_vertices;
+02482 | graph_cuda.cu:140  |     out_result->num_edges = num_edges;
+02483 | graph_cuda.cu:141  |     out_result->execution_time_ns = ns;
+02484 | graph_cuda.cu:142  |     out_result->backend_used = 1; // CUDA GPU
+02485 | graph_cuda.cu:143  | 
+02486 | graph_cuda.cu:144  |     return 0;
+02487 | graph_cuda.cu:145  | }
+

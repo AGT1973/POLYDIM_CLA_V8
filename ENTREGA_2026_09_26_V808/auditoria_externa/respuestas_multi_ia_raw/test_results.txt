@@ -1,0 +1,21 @@
+test_dense_basis_rotation (__main__.Regression.test_dense_basis_rotation) ... ok
+test_fp32_precision_contract (__main__.Regression.test_fp32_precision_contract) ... ok
+test_gram (__main__.Regression.test_gram) ... ok
+test_invalid_python_data (__main__.Regression.test_invalid_python_data) ... ok
+test_lsm_contract (__main__.Regression.test_lsm_contract) ... ok
+test_normalize_large_dynamic_range (__main__.Regression.test_normalize_large_dynamic_range) ... ok
+test_optimizer_metrics_and_descent (__main__.Regression.test_optimizer_metrics_and_descent) ... ok
+test_optimizer_rejects_zero_initial (__main__.Regression.test_optimizer_rejects_zero_initial) ... ok
+test_optimizer_vertical_motion (__main__.Regression.test_optimizer_vertical_motion) ... ok
+test_qr_orthogonality_and_span (__main__.Regression.test_qr_orthogonality_and_span) ... ok
+test_rank_rejected (__main__.Regression.test_rank_rejected) ... ok
+test_rotation_analytic_and_inverse (__main__.Regression.test_rotation_analytic_and_inverse) ... ok
+test_rotation_rejects_bad_basis (__main__.Regression.test_rotation_rejects_bad_basis) ... ok
+test_scaled_qr (__main__.Regression.test_scaled_qr) ... ok
+test_shared_publication_spawn (__main__.Regression.test_shared_publication_spawn) ... ok
+test_shared_timeout_preserves_active_bank (__main__.Regression.test_shared_timeout_preserves_active_bank) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 0.467s
+
+OK

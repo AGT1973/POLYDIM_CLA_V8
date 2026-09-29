@@ -1,0 +1,58 @@
+{
+  "platform": "Linux-6.18.44-x86_64-with-glibc2.39",
+  "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+  "steps": [
+    {
+      "command": [
+        "build.py"
+      ],
+      "returncode": 0,
+      "seconds": 0.8119397129999015,
+      "log": "verify_0.txt"
+    },
+    {
+      "command": [
+        "tests/test_regression.py"
+      ],
+      "returncode": 0,
+      "seconds": 0.5952706559996841,
+      "log": "verify_1.txt"
+    },
+    {
+      "command": [
+        "tests/test_quantum.py"
+      ],
+      "returncode": 0,
+      "seconds": 0.13275205900026776,
+      "log": "verify_2.txt"
+    },
+    {
+      "command": [
+        "tests/test_scale.py"
+      ],
+      "returncode": 0,
+      "seconds": 0.47020221499997206,
+      "log": "verify_3.txt"
+    }
+  ],
+  "sanitized": false,
+  "rust_requested": false,
+  "status": "passed",
+  "source_sha256": {
+    "src/crypto_windows.cpp": "f1427f83fd2b0f3c33228db72088c3e6ed1d3c33800adac6e0a18f6733c3f651",
+    "src/guard.rs": "abcf212b42ecc348af51420d9b9fd677e90576bf610029571b85f213cd99bd51",
+    "src/polydim.cpp": "8ef8ef72089240afe8ee16c1bab34bbd2c3afc80c7089fbd775d5ed27b5a1a31",
+    "include/polydim.h": "da9be18462669d42f655422b9cc10df4d38bcb83e2de2ea2150e400b92529e30",
+    "include/polydim_crypto_windows.h": "0f3b0d4f483bead50a467052a6045d3a5f693b32ab2692a1b0945e31e4b55d6f",
+    "include/polydim_guard.h": "a37bcd958d151c7a14005b757074b72c6c957f69532ebabb976f62a656dd3463",
+    "python/polydim/__init__.py": "a1e6a5f0fa321d2143aa537d20ec25963523ae0b2f12b0b8188661c31b3d495e",
+    "python/polydim/device.py": "de107ee98cce72239e9d5d8a9ddb82393442aa5e49f256a1b0ded8d54d2393b0",
+    "python/polydim/native.py": "f815b526cbfd76311c3bac8c196d4f79f292541af7d9f7b3e158c8aa3e949a44",
+    "python/polydim/quantum.py": "a9e7f484076298593af4eccb2ead743cd480a6a5d691645d5f45d9913221b75d",
+    "python/polydim/shared.py": "0ffb0fd9c640c9dab553bbe54f71f8ec23706d1e0434f78a5ff0a1158e1a116d",
+    "python/polydim/topology.py": "3e30fcd2891ffb991d6f61079e207117bf449d4a5264af798a230b951a76bbd1",
+    "tests/test_quantum.py": "c04328c1965c9aae4185531fdd56f95dcf6c15afcb5191888d2bed6575b5d156",
+    "tests/test_regression.py": "b297f4a4d088247f5fb265b5bc5078f2b61ca9a26198391a3e919e6046d9a18d",
+    "tests/test_scale.py": "fcd28bdb40e048c7c9b58acd758f3dbda5bdcc0b82f827e7e771a06fb2475677"
+  }
+}

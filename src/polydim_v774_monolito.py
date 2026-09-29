@@ -164,6 +164,30 @@ class PolydimFrechetBettiResult(ctypes.Structure):
     ]
 
 # =========================================================================
+# TENSORHANDLE RAII WRAPPER (Anti-UAF GC Protection)
+# =========================================================================
+
+class TensorHandle:
+    """RAII wrapper for PolydimHandle — prevents Use-After-Free by ensuring
+    handle_release is called when Python GC collects this object."""
+    def __init__(self, lib, ptr):
+        self.lib = lib
+        self.ptr = ptr
+        if self.ptr:
+            self.lib.polydim_handle_retain(self.ptr)
+
+    def __del__(self):
+        if hasattr(self, 'ptr') and self.ptr:
+            self.lib.polydim_handle_release(self.ptr)
+            self.ptr = None
+
+    @property
+    def data(self):
+        if self.ptr:
+            return self.ptr.contents.data
+        return None
+
+# =========================================================================
 # ORQUESTADOR POLIDIM V774
 # =========================================================================
 
@@ -316,6 +340,9 @@ class PolydimOrchestratorV774:
             ctypes.byref(result),
             ctypes.byref(telemetry)
         )
+        # Negative status = fatal error; positive non-zero = convergence info (MAX_ITERATIONS, CONVERGED_GRADIENT)
+        if st < 0:
+            raise RuntimeError(f"polydim_stiefel_optimize failed with code {st}: {result.status_message.decode('utf-8', errors='replace')}")
         return X, result
 
     def filter_swarm_consensus(

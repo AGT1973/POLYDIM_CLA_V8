@@ -1,0 +1,12 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V805 - PHASE 4 (NUMERICAL RIGOR)
+TARGET: E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\src\math\polydim_stiefel_v805.cpp
+
+CRITICAL ERRORS TO FIX (Category C):
+C-1: Shifted CholQR can still lose orthogonality under extreme condition number.
+C-2: No Kahan/Neumaier summation used for O(D) dot products, leading to FP32 drift.
+
+INSTRUCTIONS:
+1. Create src/math/polydim_stiefel_v805.cpp and .h.
+2. Implement polydim_dot_kahan(const float* a, const float* b, size_t n) using Neumaier summation.
+3. Update Stiefel CholQR algorithm to use polydim_dot_kahan instead of standard summation.
+4. Return ONLY "SLAB_ID: SLAB_MATH_DONE, TENSOR_READY".

@@ -8,7 +8,7 @@ pub extern "C" fn polydim_validate_tensor_v800(d: i64, k: i64, expected_bytes: u
         if d <= 0 || k <= 0 { return -3; }
         if let Some(total) = d.checked_mul(k) {
             if let Some(bytes) = total.checked_mul(8) {
-                if bytes as usize == expected_bytes { return 0; }
+                if usize::try_from(bytes).map_or(false, |b| b == expected_bytes) { return 0; }
             }
         }
         -3
@@ -128,7 +128,11 @@ pub extern "C" fn polydim_rust_frechet_betti_filter(
         if agents_ptr.is_null() || out_median.is_null() || out_n_inliers.is_null() { return -1; }
         if d <= 0 || n_agents <= 0 { return -1; }
 
-        let agents = unsafe { std::slice::from_raw_parts(agents_ptr, (n_agents * d) as usize) };
+        let total_len = match n_agents.checked_mul(d) {
+            Some(v) if v >= 0 => v,
+            _ => return -1,
+        };
+        let agents = unsafe { std::slice::from_raw_parts(agents_ptr, total_len as usize) };
         
         let mut cur_median = vec![0.0; d as usize];
         for i in 0..n_agents {
@@ -202,8 +206,9 @@ pub extern "C" fn polydim_rust_frechet_betti_filter(
                 }
                 let norm_i = norm_i_sq.sqrt();
                 let norm_j = norm_j_sq.sqrt();
-                if norm_i > 0.0 && norm_j > 0.0 {
-                    let cos_sim = dot / (norm_i * norm_j);
+                let norm_product = norm_i * norm_j;
+                if norm_product > f64::MIN_POSITIVE {
+                    let cos_sim = dot / norm_product;
                     if cos_sim >= cos_threshold {
                         dsu.union(i, j);
                     }

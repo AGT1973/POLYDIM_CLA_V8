@@ -182,7 +182,7 @@ class HardwareProbe:
                 ctypes.c_uint32
             ]
             st = lib.polydim_gram_dsyrk(
-                X_np.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                np.ascontiguousarray(X_np, dtype=np.float64).ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
                 D, K,
                 K_out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
                 0 # default threads

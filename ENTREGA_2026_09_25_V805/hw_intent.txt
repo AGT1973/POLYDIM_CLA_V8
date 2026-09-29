@@ -1,0 +1,13 @@
+﻿ARCHITECTURAL INTENT: POLYDIM V805 - PHASE 3 (HARDWARE DISPATCH)
+CONTEXT: We must remove hardcoded 'cuda' devices and build an adaptive dispatcher for CUDA, ROCm, and Google TPU (Pallas).
+TARGET: E:\POLYDIM_EINSOF\ENTREGA_2026_09_25_V805_IPC\polydim_hw_dispatcher.py
+
+CRITICAL ERRORS TO FIX (Category D):
+D-4: Hardcoded device="cuda" without querying HardwareProbe.
+D-8: No Pallas TPU logic for Google TPU v3/v4.
+D-9: Missing fallback to OpenMP CPU if GPU fails.
+
+INSTRUCTIONS:
+1. Create polydim_hw_dispatcher.py that exposes get_optimal_device() returning "tpu", "cuda", "hip", or "cpu".
+2. It must use 	orch.cuda.is_available(), 	orch.xpu.is_available(), or check for TPU via jax or 	orch_xla.
+3. Return ONLY "SLAB_ID: SLAB_HW_DONE, TENSOR_READY".
