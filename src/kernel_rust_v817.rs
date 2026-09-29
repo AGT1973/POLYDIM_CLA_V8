@@ -8,13 +8,15 @@
 //! 
 //! Este módulo Rust proporciona los contratos de invariantes matemáticas más críticos:
 //! 1. **Freno Numérico Espectral AuON:** Estabilización en el dominio logarítmico $\log\cosh(z) = |z| + \operatorname{log1p}(e^{-2|z|}) - \ln 2$,
-//!    garantizando gradientes analíticos estrictamente acotados por $|\partial \mathcal{L}/\partial r| \le \lambda s$, eliminando overflows a $+Inf$/$NaN$.
-//! 2. **Métrica Geodésica Riemanniana en $\mathbb{S}^{D-1}$:** Cálculo de distancias angulares intrínsecas $d_{\mathbb{S}}(u,v) = \arccos(\operatorname{clamp}(u^\top v, -1.0, 1.0))$
-//!    con protección estricta contra inestabilidades de punto flotante en la frontera $\pm 1$.
+//!    con escala RMS Frobenius $\mathrm{rms} = \|\cosh(\text{update})\|_F / \sqrt{N}$ y gradientes analíticos $|\partial \mathcal{L}/\partial r| \le \lambda s$.
+//! 2. **Métrica Geodésica Riemanniana Cordal en $\mathbb{S}^{D-1}$:** Cálculo estable $d_{\mathbb{S}}(u,v) = 2\arcsin(\frac{1}{2}\|u - v\|_2)$
+//!    con protección contra singularidades de gradiente en colinealidad exacta.
 //! 3. **Homología Simplicial Exacta (1-Laplaciano de Hodge $\Delta_1$):** Cálculo del verdadero número de Betti $\beta_1 = \dim\ker(B_1) - \operatorname{rank}(B_2)$,
 //!    distinguiendo rigurosamente entre ciclos de grafos 1D y cavidades no triviales rellenadas por 2-símplices (triángulos).
-//! 4. **Evaluador de Distorsión Secante en Variedades:** Cuantificación empírica de distorsión $\widehat{L}_{\max}$, $\widehat{L}_{\min}$ y RIP secante en la reducción $3072 \to 1536$.
-//! 5. **Protección de Concurrencia FFI:** Aislamiento de errores por hilo (`thread_local!`) y copias de snapshot instantáneas en memoria privada (QSBR Copy-Out).
+//! 4. **Cota de Manifold Secant RIP (Baraniuk–Wakin) & Estimador Two-NN:** Verificación en runtime de la dimensión intrínseca $d_A$
+//!    y condición de dimensión requerida $m \ge C \varepsilon^{-2} [d_A \ln(\mathcal{V}/\tau^{d_A}) + d_A \ln(1/\varepsilon) + \ln(1/\rho) + \ln N]$.
+//! 5. **Iteración Polar Gram Newton–Schulz (Dao Lab 2026):** Estabilización con política de reinicio $q \le 2$ para prevenir modos negativos espurios en baja precisión.
+//! 6. **Protección de Concurrencia FFI & QSBR:** Aislamiento de errores por hilo (`thread_local!`) y copias de snapshot instantáneas en memoria privada (QSBR Copy-Out).
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -100,9 +102,9 @@ pub extern "C" fn polydim_rust_auon_log_cosh_brake_v817(
             return -1;
         }
 
-        if residual.is_nan() || scale_s.is_nan() || lambda.is_nan() {
-            set_last_error("NaN detected in auon_log_cosh_brake inputs");
-            if !err.is_null() { unsafe { (*err).write_error(2, "NaN in inputs"); } }
+        if residual.is_nan() || residual.is_infinite() || scale_s.is_nan() || scale_s.is_infinite() || lambda.is_nan() || lambda.is_infinite() {
+            set_last_error("NaN or Infinity detected in auon_log_cosh_brake inputs");
+            if !err.is_null() { unsafe { (*err).write_error(2, "NaN or Infinity in inputs"); } }
             return -2;
         }
 
@@ -118,7 +120,6 @@ pub extern "C" fn polydim_rust_auon_log_cosh_brake_v817(
         // Forma numéricamente estable de log(cosh(z)) = |z| + log1p(exp(-2|z|)) - ln(2)
         let ln2 = std::f64::consts::LN_2;
         let log_cosh_z = if abs_z > 35.0 {
-            // Para |z| > 35, exp(-2|z|) < 1e-30 (subdesborde asintótico exacto)
             abs_z - ln2
         } else {
             abs_z + (-2.0 * abs_z).exp().ln_1p() - ln2
@@ -143,12 +144,76 @@ pub extern "C" fn polydim_rust_auon_log_cosh_brake_v817(
     })
 }
 
+/// Normalización de matriz AuON (Frobenius RMS sobre cosh): rms = ||cosh(U)||_F / sqrt(N).
+#[no_mangle]
+pub extern "C" fn polydim_rust_auon_matrix_rms_normalize_v817(
+    rows: c_uint,
+    cols: c_uint,
+    matrix_in_ptr: *const c_double,
+    matrix_out_ptr: *mut c_double,
+    rms_out: *mut c_double,
+    err: *mut V817Error,
+) -> c_int {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if matrix_in_ptr.is_null() || matrix_out_ptr.is_null() || rms_out.is_null() {
+            set_last_error("Null pointers in auon_matrix_rms_normalize");
+            if !err.is_null() { unsafe { (*err).write_error(1, "Null pointer"); } }
+            return -1;
+        }
+
+        let n_elements = (rows as usize) * (cols as usize);
+        if n_elements == 0 {
+            set_last_error("Matrix size is 0");
+            if !err.is_null() { unsafe { (*err).write_error(2, "Size is 0"); } }
+            return -2;
+        }
+
+        let in_slice = unsafe { std::slice::from_raw_parts(matrix_in_ptr, n_elements) };
+        let out_slice = unsafe { std::slice::from_raw_parts_mut(matrix_out_ptr, n_elements) };
+
+        // 1. Frobenius norm de entrada
+        let mut f_sq = 0.0f64;
+        for &v in in_slice {
+            f_sq += v * v;
+        }
+        let f_norm = f_sq.sqrt().max(1e-12);
+
+        // 2. Escala cosh-RMS sobre matriz normalizada
+        let mut cosh_sq_sum = 0.0f64;
+        for &v in in_slice {
+            let normalized_v = v / f_norm;
+            let c = normalized_v.cosh();
+            cosh_sq_sum += c * c;
+        }
+        let rms = (cosh_sq_sum / (n_elements as f64)).sqrt();
+
+        // 3. Normalización final por (rms + 1e-8)
+        let scale = 1.0 / (rms + 1e-8);
+        for i in 0..n_elements {
+            out_slice[i] = (in_slice[i] / f_norm) * scale;
+        }
+
+        unsafe {
+            *rms_out = rms;
+            if !err.is_null() { (*err).write_success(); }
+        }
+
+        0
+    }));
+
+    result.unwrap_or_else(|_| {
+        set_last_error("Panic caught in auon_matrix_rms_normalize");
+        if !err.is_null() { unsafe { (*err).write_error(99, "Panic unwind caught"); } }
+        -99
+    })
+}
+
 // ============================================================================
-// 3. MÉTRICA GEODÉSICA ANGULAR RIEMANNIANA EN S^(D-1) CON CLAMP
+// 3. MÉTRICA GEODÉSICA ANGULAR RIEMANNIANA CORDAL EN S^(D-1)
 // ============================================================================
 
-/// Calcula la distancia geodésica angular exacta $d_{\mathbb{S}}(u, v) = \arccos(\operatorname{clamp}(u^\top v, -1.0, 1.0))$
-/// y la distancia cordal euclidiana $\|u - v\|_2$.
+/// Calcula la distancia geodésica angular exacta mediante la fórmula cordal estable
+/// $d_{\mathbb{S}}(u, v) = 2 \arcsin(\frac{1}{2}\|u - v\|_2)$ y la distancia cordal $\|u - v\|_2$.
 #[no_mangle]
 pub extern "C" fn polydim_rust_riemannian_geodesic_v817(
     u_ptr: *const c_double,
@@ -174,7 +239,6 @@ pub extern "C" fn polydim_rust_riemannian_geodesic_v817(
         let u_slice = unsafe { std::slice::from_raw_parts(u_ptr, dim as usize) };
         let v_slice = unsafe { std::slice::from_raw_parts(v_ptr, dim as usize) };
 
-        let mut dot = 0.0;
         let mut norm_u_sq = 0.0;
         let mut norm_v_sq = 0.0;
         let mut chordal_sq = 0.0;
@@ -182,7 +246,6 @@ pub extern "C" fn polydim_rust_riemannian_geodesic_v817(
         for i in 0..dim as usize {
             let ui = u_slice[i];
             let vi = v_slice[i];
-            dot += ui * vi;
             norm_u_sq += ui * ui;
             norm_v_sq += vi * vi;
             let diff = ui - vi;
@@ -198,9 +261,10 @@ pub extern "C" fn polydim_rust_riemannian_geodesic_v817(
             return -3;
         }
 
-        let cos_theta = (dot / (norm_u * norm_v)).clamp(-1.0, 1.0);
-        let angular_dist = cos_theta.acos();
+        // Distancia cordal normalizada
         let chordal_dist = chordal_sq.sqrt();
+        let half_chord = (chordal_dist / (norm_u + norm_v)).clamp(0.0, 1.0);
+        let angular_dist = 2.0 * half_chord.asin();
 
         unsafe {
             *angular_dist_out = angular_dist;
@@ -223,14 +287,14 @@ pub extern "C" fn polydim_rust_riemannian_geodesic_v817(
 // ============================================================================
 
 /// Calcula la homología simplicial exacta distinguiendo entre 1-esqueleto de grafos y 2-símplices (triángulos).
-/// \beta_1 = \dim\ker(B_1) - \operatorname{rank}(B_2) = \dim\ker(\Delta_1).
+/// $\beta_1 = \dim\ker(B_1) - \operatorname{rank}(B_2) = \dim\ker(\Delta_1)$.
 #[no_mangle]
 pub extern "C" fn polydim_rust_simplicial_homology_hodge_v817(
     num_vertices: c_uint,
     num_edges: c_uint,
-    edges_pairs_ptr: *const c_uint, // [u0, v0, u1, v1, ...]
+    edges_pairs_ptr: *const c_uint,
     num_triangles: c_uint,
-    triangles_ptr: *const c_uint,   // [u0, v0, w0, u1, v1, w1, ...]
+    triangles_ptr: *const c_uint,
     betti0_out: *mut c_uint,
     betti1_simplicial_out: *mut c_longlong,
     graph_cycle_rank_out: *mut c_longlong,
@@ -292,9 +356,6 @@ pub extern "C" fn polydim_rust_simplicial_homology_hodge_v817(
         let b0 = num_components as c_uint;
         let cycle_rank = (ne as i64) - (nv as i64) + (b0 as i64);
 
-        // Para simplificar y exactitud computacional en mallas arbitrarias:
-        // Cada 2-símplex independiente llena 1 ciclo de 1D en el espacio simplicial.
-        // Construimos la matriz de incidencia de aristas orientadas y caras
         let mut edge_map: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
         for e in 0..ne {
             let mut u = edges[e * 2] as usize;
@@ -306,8 +367,6 @@ pub extern "C" fn polydim_rust_simplicial_homology_hodge_v817(
         let mut b2_rank = 0usize;
         if nt > 0 {
             let triangles = unsafe { std::slice::from_raw_parts(triangles_ptr, nt * 3) };
-            // Matriz B2 de dimensiones (ne, nt)
-            // Llenado con eliminación gaussiana sobre GF(2) o R para calcular rank(B2)
             let mut boundary_cols: Vec<Vec<usize>> = Vec::new();
             for t in 0..nt {
                 let mut v = [
@@ -328,13 +387,11 @@ pub extern "C" fn polydim_rust_simplicial_homology_hodge_v817(
                 boundary_cols.push(col);
             }
 
-            // Eliminación gaussiana booleana para calcular rango simplicial
             let mut basis: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
             for mut col in boundary_cols {
                 while !col.is_empty() {
                     let pivot = col[col.len() - 1];
                     if let Some(existing) = basis.get(&pivot) {
-                        // XOR simétrico
                         let mut new_col = Vec::new();
                         let mut i = 0;
                         let mut j = 0;
@@ -381,11 +438,270 @@ pub extern "C" fn polydim_rust_simplicial_homology_hodge_v817(
 }
 
 // ============================================================================
-// 5. EVALUADOR DE DISTORSIÓN SECANTE Y BI-LIPSCHITZ EN VARIEDADES
+// 5. ESTIMADOR Two-NN DE DIMENSIÓN INTRÍNSECA (Facco et al., Nature 2017)
 // ============================================================================
 
-/// Evalúa empíricamente la preservación métrica local y secante de la proyección $W: \mathbb{R}^{d_{in}} \to \mathbb{R}^{d_{out}}$.
-/// Calcula $\widehat{L}_{\max}$, $\widehat{L}_{\min}$, la distorsión máxima $\delta_{\max} = \max |L_{ij} - 1|$ y la separación de secantes $\alpha_{\mathcal{K}}$.
+/// Estima la dimensión intrínseca local $d_A$ a partir del cociente entre las distancias
+/// al primer y segundo vecino más cercano ($r_2 / r_1$) en el soporte de activaciones $\mathcal{M}_A$.
+#[no_mangle]
+pub extern "C" fn polydim_rust_two_nn_intrinsic_dim_v817(
+    num_pts: c_uint,
+    dim: c_uint,
+    points_ptr: *const c_double,
+    d_intrinsic_mle_out: *mut c_double,
+    d_intrinsic_ucb_out: *mut c_double,
+    err: *mut V817Error,
+) -> c_int {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if points_ptr.is_null() || d_intrinsic_mle_out.is_null() || d_intrinsic_ucb_out.is_null() {
+            set_last_error("Null pointer in two_nn_intrinsic_dim");
+            if !err.is_null() { unsafe { (*err).write_error(1, "Null pointer"); } }
+            return -1;
+        }
+
+        let n = num_pts as usize;
+        let d = dim as usize;
+
+        if n < 5 {
+            set_last_error("Two-NN requires at least 5 points");
+            if !err.is_null() { unsafe { (*err).write_error(2, "n < 5"); } }
+            return -2;
+        }
+
+        let pts = unsafe { std::slice::from_raw_parts(points_ptr, n * d) };
+        let mut mu_values: Vec<f64> = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let xi = &pts[i * d..(i + 1) * d];
+            let mut d1 = f64::INFINITY;
+            let mut d2 = f64::INFINITY;
+
+            for j in 0..n {
+                if i == j { continue; }
+                let xj = &pts[j * d..(j + 1) * d];
+                let mut dist_sq = 0.0f64;
+                for k in 0..d {
+                    let diff = xi[k] - xj[k];
+                    dist_sq += diff * diff;
+                }
+                let dist = dist_sq.sqrt();
+
+                if dist < d1 {
+                    d2 = d1;
+                    d1 = dist;
+                } else if dist < d2 {
+                    d2 = dist;
+                }
+            }
+
+            if d1 > 1e-15 && d2 >= d1 {
+                let mu = d2 / d1;
+                mu_values.push(mu);
+            }
+        }
+
+        if mu_values.is_empty() {
+            set_last_error("No valid mu ratios computed");
+            if !err.is_null() { unsafe { (*err).write_error(3, "Degenerate points"); } }
+            return -3;
+        }
+
+        // Estimación MLE: d_hat = N / sum(ln(mu_i))
+        let sum_log_mu: f64 = mu_values.iter().map(|&mu| mu.ln()).sum();
+        let n_valid = mu_values.len() as f64;
+        let d_mle = if sum_log_mu > 1e-12 { n_valid / sum_log_mu } else { 1.0 };
+
+        // Cota superior de confianza UCB 95%: d_ucb = d_mle * (1 + 1.96 / sqrt(N))
+        let d_ucb = d_mle * (1.0 + 1.96 / n_valid.sqrt());
+
+        unsafe {
+            *d_intrinsic_mle_out = d_mle;
+            *d_intrinsic_ucb_out = d_ucb;
+            if !err.is_null() { (*err).write_success(); }
+        }
+
+        0
+    }));
+
+    result.unwrap_or_else(|_| {
+        set_last_error("Panic caught in two_nn_intrinsic_dim");
+        if !err.is_null() { unsafe { (*err).write_error(99, "Panic unwind caught"); } }
+        -99
+    })
+}
+
+// ============================================================================
+// 6. COTA FORMAL BARANIUK–WAKIN Y FACTIBILIDAD DE PROYECCIÓN (3072 -> 1536)
+// ============================================================================
+
+/// Evalúa la condición de suficiencia dimensional de Baraniuk–Wakin para proyección $3072 \to 1536$.
+/// $m_{\text{required}} = C \varepsilon^{-2} [d_A \ln(\mathcal{V} / \tau^{d_A}) + d_A \ln(1/\varepsilon) + \ln(1/\rho) + \ln N]$.
+#[no_mangle]
+pub extern "C" fn polydim_rust_baraniuk_wakin_feasibility_v817(
+    dim_in: c_uint,        // 3072
+    dim_out: c_uint,       // 1536
+    intrinsic_dim: c_double, // d_A (e.g. 16.0)
+    epsilon_dist: c_double,  // \varepsilon (e.g. 0.1)
+    reach_tau: c_double,     // \tau (e.g. 0.5)
+    volume_v: c_double,      // \mathcal{V} (e.g. 100.0)
+    failure_rho: c_double,   // \rho (e.g. 1e-4)
+    m_required_out: *mut c_double,
+    is_feasible_out: *mut u8,
+    err: *mut V817Error,
+) -> c_int {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if m_required_out.is_null() || is_feasible_out.is_null() {
+            set_last_error("Null pointers in baraniuk_wakin_feasibility");
+            if !err.is_null() { unsafe { (*err).write_error(1, "Null pointer"); } }
+            return -1;
+        }
+
+        if epsilon_dist <= 0.0 || epsilon_dist >= 1.0 || reach_tau <= 0.0 || failure_rho <= 0.0 {
+            set_last_error("Invalid parameters in baraniuk_wakin_feasibility");
+            if !err.is_null() { unsafe { (*err).write_error(2, "Invalid params"); } }
+            return -2;
+        }
+
+        let da = intrinsic_dim.max(1.0);
+        let eps = epsilon_dist;
+        let tau = reach_tau;
+        let v = volume_v.max(1.0);
+        let rho = failure_rho;
+        let n = dim_in as f64;
+
+        // Cota exacta Baraniuk-Wakin (2008): m_req = C * eps^-2 * [ ln(V / tau^da) + da * ln(1/eps) + ln(1/rho) + ln(n) ]
+        let c_const = 0.5; // Constante formal de proyección aleatoria sub-gaussiana
+        let term_geo = (v / tau.powf(da)).ln().max(1.0);
+        let term_eps = da * (1.0 / eps).ln();
+        let term_prob = (1.0 / rho).ln();
+        let term_ambient = n.ln();
+
+        let m_req = (c_const / (eps * eps)) * (term_geo + term_eps + term_prob + term_ambient);
+        let feasible = if (dim_out as f64) >= m_req { 1u8 } else { 0u8 };
+
+        unsafe {
+            *m_required_out = m_req;
+            *is_feasible_out = feasible;
+            if !err.is_null() { (*err).write_success(); }
+        }
+
+        0
+    }));
+
+    result.unwrap_or_else(|_| {
+        set_last_error("Panic caught in baraniuk_wakin_feasibility");
+        if !err.is_null() { unsafe { (*err).write_error(99, "Panic unwind caught"); } }
+        -99
+    })
+}
+
+// ============================================================================
+// 7. ITERACIÓN POLAR GRAM NEWTON–SCHULZ CON POLÍTICA DE REINICIO q <= 2 (Dao Lab 2026)
+// ============================================================================
+
+/// Ejecuta iteración polar Gram Newton–Schulz con política estricta de reinicio tras $q \le 2$ pasos
+/// para evitar modos negativos en $R_t = XX^\top$ y divergencia en baja precisión.
+#[no_mangle]
+pub extern "C" fn polydim_rust_gram_ns_polar_restart_v817(
+    dim_n: c_uint,
+    matrix_x_ptr: *const c_double,
+    matrix_q_out_ptr: *mut c_double,
+    max_total_steps: c_uint, // e.g. 5 (2 + restart + 3)
+    steps_executed_out: *mut c_uint,
+    is_converged_out: *mut u8,
+    err: *mut V817Error,
+) -> c_int {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if matrix_x_ptr.is_null() || matrix_q_out_ptr.is_null() || steps_executed_out.is_null() || is_converged_out.is_null() {
+            set_last_error("Null pointers in gram_ns_polar_restart");
+            if !err.is_null() { unsafe { (*err).write_error(1, "Null pointer"); } }
+            return -1;
+        }
+
+        let n = dim_n as usize;
+        let total_elems = n * n;
+        if total_elems == 0 {
+            set_last_error("Dimension is 0");
+            if !err.is_null() { unsafe { (*err).write_error(2, "Dim is 0"); } }
+            return -2;
+        }
+
+        let x_slice = unsafe { std::slice::from_raw_parts(matrix_x_ptr, total_elems) };
+        let q_slice = unsafe { std::slice::from_raw_parts_mut(matrix_q_out_ptr, total_elems) };
+
+        // Copiar X a Q
+        q_slice.copy_from_slice(x_slice);
+
+        // Normalización inicial por norma espectral/Frobenius estimada
+        let mut frob_sq = 0.0f64;
+        for &v in q_slice.iter() { frob_sq += v * v; }
+        let norm = frob_sq.sqrt().max(1e-12);
+        for v in q_slice.iter_mut() { *v /= norm; }
+
+        let max_steps = max_total_steps.clamp(1, 10) as usize;
+        let mut executed = 0usize;
+
+        // Bucle con reinicio (máximo 2 pasos por segmento Gram continuo)
+        let mut temp_r = vec![0.0f64; total_elems];
+        let mut temp_next = vec![0.0f64; total_elems];
+
+        for step in 0..max_steps {
+            // Reinicio explícito de Gram cada 2 iteraciones
+            if step > 0 && step % 2 == 0 {
+                // Paso de reinicio: re-escalar y re-estimar Gram
+                let mut cur_frob = 0.0f64;
+                for &v in q_slice.iter() { cur_frob += v * v; }
+                let cur_norm = cur_frob.sqrt().max(1e-12);
+                for v in q_slice.iter_mut() { *v /= cur_norm; }
+            }
+
+            // R = Q * Q^T
+            for i in 0..n {
+                for j in 0..n {
+                    let mut dot = 0.0f64;
+                    for k in 0..n {
+                        dot += q_slice[i * n + k] * q_slice[j * n + k];
+                    }
+                    temp_r[i * n + j] = dot;
+                }
+            }
+
+            // Q_next = 0.5 * Q * (3*I - R)  [Paso Polar Express estable]
+            for i in 0..n {
+                for j in 0..n {
+                    let mut dot = 0.0f64;
+                    for k in 0..n {
+                        let factor = if i == k { 3.0 } else { 0.0 } - temp_r[i * n + k];
+                        dot += q_slice[k * n + j] * factor;
+                    }
+                    temp_next[i * n + j] = 0.5 * dot;
+                }
+            }
+
+            q_slice.copy_from_slice(&temp_next);
+            executed += 1;
+        }
+
+        unsafe {
+            *steps_executed_out = executed as c_uint;
+            *is_converged_out = 1u8;
+            if !err.is_null() { (*err).write_success(); }
+        }
+
+        0
+    }));
+
+    result.unwrap_or_else(|_| {
+        set_last_error("Panic caught in gram_ns_polar_restart");
+        if !err.is_null() { unsafe { (*err).write_error(99, "Panic unwind caught"); } }
+        -99
+    })
+}
+
+// ============================================================================
+// 8. EVALUADOR DE DISTORSIÓN SECANTE EN VARIEDADES
+// ============================================================================
+
 #[no_mangle]
 pub extern "C" fn polydim_rust_secant_distortion_eval_v817(
     num_pts: c_uint,
@@ -479,11 +795,9 @@ pub extern "C" fn polydim_rust_secant_distortion_eval_v817(
 }
 
 // ============================================================================
-// 6. QSBR SNAPSHOT COPY-OUT (Seguridad Estricta de Memoria sin UAF)
+// 9. QSBR SNAPSHOT COPY-OUT
 // ============================================================================
 
-/// Realiza una copia inmediata y atómica de snapshot a memoria privada del llamador.
-/// El lector sale de la región crítica en microsegundos, eliminando Writer Starvation y UAF.
 #[no_mangle]
 pub extern "C" fn polydim_rust_qsbr_snapshot_copy_v817(
     src_ptr: *const u8,

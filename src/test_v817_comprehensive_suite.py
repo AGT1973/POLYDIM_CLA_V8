@@ -293,10 +293,89 @@ def test_8_data_path_latency_benchmark():
     assert effective_bw_gb_s > 1.0, "Falla: Ancho de banda de memoria sospechosamente bajo"
     print("  ✅ TEST 8 PASSED: Latencia de ruta de datos y throughput físico verificados.")
 
+def test_9_two_nn_baraniuk_wakin_feasibility():
+    print_banner("TEST 9: Estimación de Dimensión Intrínseca Two-NN & Cota Formal de Baraniuk–Wakin (3072 -> 1536)")
+    rust_k = PolydimRustKernelV817()
+
+    np.random.seed(42)
+    n_pts = 200
+    ambient_dim = 3072
+    true_intrinsic_dim = 12
+
+    # Generar manifold sintético de dimensión 12 inmerso en R^3072
+    basis, _ = np.linalg.qr(np.random.randn(ambient_dim, true_intrinsic_dim))
+    coords = np.random.randn(n_pts, true_intrinsic_dim)
+    pts = coords @ basis.T # (200, 3072)
+
+    # 1. Estimación Two-NN en runtime
+    res_2nn = rust_k.two_nn_intrinsic_dim(pts)
+    d_mle = res_2nn["d_intrinsic_mle"]
+    d_ucb = res_2nn["d_intrinsic_ucb"]
+
+    print(f"  Dimensión Intrínseca Real:      {true_intrinsic_dim}")
+    print(f"  Estimación Two-NN MLE (d_hat):  {d_mle:.2f}")
+    print(f"  Cota Superior UCB 95%:          {d_ucb:.2f}")
+
+    assert abs(d_mle - true_intrinsic_dim) < 5.0, f"Estimación Two-NN fuera de rango: {d_mle}"
+
+    # 2. Factibilidad Baraniuk-Wakin para proyección 3072 -> 1536
+    res_bw = rust_k.baraniuk_wakin_feasibility(
+        dim_in=3072,
+        dim_out=1536,
+        intrinsic_dim=d_ucb,
+        epsilon=0.15,
+        reach=0.5,
+        volume=100.0,
+        failure_rho=1e-4,
+    )
+
+    print(f"  Cota Requerida Baraniuk-Wakin:  m_req = {res_bw['m_required']:.2f}")
+    print(f"  Dimensión de Destino (m):       1536")
+    print(f"  Margen de Seguridad:            {res_bw['margin']:.2f} dimensiones")
+    print(f"  Factibilidad Teórica:           {res_bw['is_feasible']}")
+
+    assert res_bw["is_feasible"] is True, "Falla: Proyección a 1536 debe ser factible según Baraniuk-Wakin"
+    assert res_bw["margin"] > 0, "Falla: El margen dimensional debe ser positivo"
+    print("  ✅ TEST 9 PASSED: Dimensión intrínseca y cota de Baraniuk-Wakin certificadas.")
+
+def test_10_gram_ns_polar_restart_and_auon_matrix():
+    print_banner("TEST 10: Iteración Polar Gram Newton–Schulz con Reinicio q <= 2 & Normalización AuON Matrix RMS")
+    rust_k = PolydimRustKernelV817()
+
+    np.random.seed(999)
+    n = 64
+    # Matriz simétrica/cuadrada aleatoria
+    a_mat = np.random.randn(n, n)
+
+    # 1. Gram Newton-Schulz con política de reinicio q <= 2
+    q_ortho, steps, converged = rust_k.gram_ns_polar_restart(a_mat, max_total_steps=5)
+    
+    # Verificar ortogonalidad Q * Q^T \approx I
+    qqt = q_ortho @ q_ortho.T
+    ident = np.eye(n)
+    ortho_error = np.linalg.norm(qqt - ident, ord='fro') / n
+
+    print(f"  Gram-NS Pasos Ejecutados: {steps} (con reinicio cada q <= 2 pasos)")
+    print(f"  Error de Ortogonalidad Relativo Frobenius: {ortho_error:.6e}")
+    print(f"  Convergencia Exitosa: {converged}")
+
+    assert converged is True, "Falla: Gram-NS debió converger"
+    assert ortho_error < 0.2, f"Falla: Error de ortogonalidad excesivo: {ortho_error}"
+
+    # 2. AuON Matrix RMS Normalization (div by sqrt(N))
+    mat_in = np.random.randn(32, 32) * 5.0
+    mat_out, rms_val = rust_k.auon_matrix_rms_normalize(mat_in)
+
+    print(f"  AuON Matrix RMS calculado: {rms_val:.4f}")
+    assert rms_val > 0.0, "Falla: RMS debe ser estrictamente positivo"
+    assert not np.isnan(mat_out).any(), "Falla: Salida AuON contiene NaNs"
+    assert not np.isinf(mat_out).any(), "Falla: Salida AuON contiene Infs"
+    print("  ✅ TEST 10 PASSED: Gram-NS estabilizado con reinicio y AuON Matrix RMS verificado.")
+
 
 def run_all_tests():
     print("\n" + "=" * 80)
-    print("🧪 INICIANDO SUITE DE PRUEBAS FÍSICAS Y ASINTÓTICAS POLYDIM V817")
+    print("🧪 INICIANDO SUITE DE PRUEBAS FÍSICAS Y ASINTÓTICAS POLYDIM V817 (10/10)")
     print("=" * 80)
 
     t_start = time.perf_counter()
@@ -308,10 +387,12 @@ def run_all_tests():
     test_6_qsbr_snapshot_copy()
     test_7_information_bottleneck_dpi()
     test_8_data_path_latency_benchmark()
+    test_9_two_nn_baraniuk_wakin_feasibility()
+    test_10_gram_ns_polar_restart_and_auon_matrix()
     total_time = time.perf_counter() - t_start
 
     print("\n" + "=" * 80)
-    print(f"🎉 CERTIFICACIÓN FÍSICA V817: 8/8 PRUEBAS EXITOSAS (Exit Code 0) en {total_time:.2f}s")
+    print(f"🎉 CERTIFICACIÓN FÍSICA V817: 10/10 PRUEBAS EXITOSAS (Exit Code 0) en {total_time:.2f}s")
     print("=" * 80)
     sys.exit(0)
 

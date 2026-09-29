@@ -158,6 +158,55 @@ class PolydimRustKernelV817:
             ctypes.POINTER(PolydimErrorV817),
         ]
 
+        # Two-NN Intrinsic Dimension
+        self.lib.polydim_rust_two_nn_intrinsic_dim_v817.restype = ctypes.c_int
+        self.lib.polydim_rust_two_nn_intrinsic_dim_v817.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # Baraniuk-Wakin Feasibility
+        self.lib.polydim_rust_baraniuk_wakin_feasibility_v817.restype = ctypes.c_int
+        self.lib.polydim_rust_baraniuk_wakin_feasibility_v817.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # Gram Newton-Schulz Polar Restart
+        self.lib.polydim_rust_gram_ns_polar_restart_v817.restype = ctypes.c_int
+        self.lib.polydim_rust_gram_ns_polar_restart_v817.argtypes = [
+            ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # AuON Matrix RMS Normalize
+        self.lib.polydim_rust_auon_matrix_rms_normalize_v817.restype = ctypes.c_int
+        self.lib.polydim_rust_auon_matrix_rms_normalize_v817.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
     def get_last_error_string(self) -> str:
         """Copia inmediatamente el string de error en memoria privada antes de cualquier otra llamada FFI."""
         ptr = self.lib.polydim_rust_get_last_error_v817()
@@ -288,6 +337,121 @@ class PolydimRustKernelV817:
             "secant_alpha": secant_alpha_out.value,
         }
 
+    def two_nn_intrinsic_dim(self, points: np.ndarray) -> Dict[str, float]:
+        """Estima la dimensión intrínseca d_A mediante el estimador Two-NN (Nature 2017) con cota UCB al 95%."""
+        pts_arr = np.ascontiguousarray(points, dtype=np.float64)
+        n, dim = pts_arr.shape
+        d_mle_out = ctypes.c_double(0.0)
+        d_ucb_out = ctypes.c_double(0.0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_rust_two_nn_intrinsic_dim_v817(
+            ctypes.c_uint(n),
+            ctypes.c_uint(dim),
+            pts_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.byref(d_mle_out),
+            ctypes.byref(d_ucb_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            msg = err.message() or self.get_last_error_string()
+            raise RuntimeError(f"Rust two_nn_intrinsic_dim falló: {msg}")
+
+        return {
+            "d_intrinsic_mle": d_mle_out.value,
+            "d_intrinsic_ucb": d_ucb_out.value,
+        }
+
+    def baraniuk_wakin_feasibility(
+        self,
+        dim_in: int,
+        dim_out: int,
+        intrinsic_dim: float,
+        epsilon: float = 0.1,
+        reach: float = 0.5,
+        volume: float = 100.0,
+        failure_rho: float = 1e-4,
+    ) -> Dict[str, Any]:
+        """Evalúa la suficiencia dimensional de Baraniuk–Wakin para proyección bi-Lipschitz."""
+        m_req_out = ctypes.c_double(0.0)
+        is_feas_out = ctypes.c_uint8(0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_rust_baraniuk_wakin_feasibility_v817(
+            ctypes.c_uint(dim_in),
+            ctypes.c_uint(dim_out),
+            ctypes.c_double(intrinsic_dim),
+            ctypes.c_double(epsilon),
+            ctypes.c_double(reach),
+            ctypes.c_double(volume),
+            ctypes.c_double(failure_rho),
+            ctypes.byref(m_req_out),
+            ctypes.byref(is_feas_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            msg = err.message() or self.get_last_error_string()
+            raise RuntimeError(f"Rust baraniuk_wakin_feasibility falló: {msg}")
+
+        return {
+            "m_required": m_req_out.value,
+            "is_feasible": bool(is_feas_out.value),
+            "margin": dim_out - m_req_out.value,
+        }
+
+    def gram_ns_polar_restart(self, matrix: np.ndarray, max_total_steps: int = 5) -> Tuple[np.ndarray, int, bool]:
+        """Iteración Polar Gram Newton–Schulz con política estricta de reinicio tras q <= 2 pasos."""
+        mat_arr = np.ascontiguousarray(matrix, dtype=np.float64)
+        n, m = mat_arr.shape
+        if n != m:
+            raise ValueError("Gram NS requiere matriz cuadrada")
+
+        q_out = np.zeros_like(mat_arr)
+        steps_out = ctypes.c_uint(0)
+        conv_out = ctypes.c_uint8(0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_rust_gram_ns_polar_restart_v817(
+            ctypes.c_uint(n),
+            mat_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            q_out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.c_uint(max_total_steps),
+            ctypes.byref(steps_out),
+            ctypes.byref(conv_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            msg = err.message() or self.get_last_error_string()
+            raise RuntimeError(f"Rust gram_ns_polar_restart falló: {msg}")
+
+        return q_out, steps_out.value, bool(conv_out.value)
+
+    def auon_matrix_rms_normalize(self, matrix: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Normalización de matriz AuON (Frobenius RMS sobre cosh dividido por sqrt(N))."""
+        mat_arr = np.ascontiguousarray(matrix, dtype=np.float64)
+        rows, cols = mat_arr.shape
+        out_mat = np.zeros_like(mat_arr)
+        rms_out = ctypes.c_double(0.0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_rust_auon_matrix_rms_normalize_v817(
+            ctypes.c_uint(rows),
+            ctypes.c_uint(cols),
+            mat_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            out_mat.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.byref(rms_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            msg = err.message() or self.get_last_error_string()
+            raise RuntimeError(f"Rust auon_matrix_rms_normalize falló: {msg}")
+
+        return out_mat, rms_out.value
+
 
 # =============================================================================
 # BINDING NATIVO C++ (polydim_cpp_v817.dll)
@@ -340,6 +504,70 @@ class PolydimCppKernelV817:
             ctypes.POINTER(PolydimErrorV817),
         ]
 
+        # Secant Distortion
+        self.lib.polydim_cpp_secant_distortion_eval_v817.restype = ctypes.c_int
+        self.lib.polydim_cpp_secant_distortion_eval_v817.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # Two-NN Intrinsic Dimension
+        self.lib.polydim_cpp_two_nn_intrinsic_dim_v817.restype = ctypes.c_int
+        self.lib.polydim_cpp_two_nn_intrinsic_dim_v817.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # Baraniuk-Wakin Feasibility
+        self.lib.polydim_cpp_baraniuk_wakin_feasibility_v817.restype = ctypes.c_int
+        self.lib.polydim_cpp_baraniuk_wakin_feasibility_v817.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # Gram Newton-Schulz Polar Restart
+        self.lib.polydim_cpp_gram_ns_polar_restart_v817.restype = ctypes.c_int
+        self.lib.polydim_cpp_gram_ns_polar_restart_v817.argtypes = [
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
+        # AuON Matrix RMS Normalize
+        self.lib.polydim_cpp_auon_matrix_rms_normalize_v817.restype = ctypes.c_int
+        self.lib.polydim_cpp_auon_matrix_rms_normalize_v817.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.POINTER(PolydimErrorV817),
+        ]
+
     def auon_brake(self, residual: float, scale_s: float = 1.0, lambda_val: float = 1.0) -> Tuple[float, float]:
         """Calcula pérdida y gradiente numéricamente estables con freno log-cosh en C++."""
         loss_out = ctypes.c_double(0.0)
@@ -361,7 +589,6 @@ class PolydimCppKernelV817:
         return loss_out.value, grad_out.value
 
     def riemannian_geodesic(self, u: np.ndarray, v: np.ndarray) -> Tuple[float, float]:
-
         u_arr = np.ascontiguousarray(u, dtype=np.float64)
         v_arr = np.ascontiguousarray(v, dtype=np.float64)
         dim = len(u_arr)
@@ -419,6 +646,117 @@ class PolydimCppKernelV817:
             "delta_max": delta_max_out.value,
             "secant_alpha": secant_alpha_out.value,
         }
+
+    def two_nn_intrinsic_dim(self, points: np.ndarray) -> Dict[str, float]:
+        """Estima la dimensión intrínseca d_A mediante Two-NN en C++."""
+        pts_arr = np.ascontiguousarray(points, dtype=np.float64)
+        n, dim = pts_arr.shape
+        d_mle_out = ctypes.c_double(0.0)
+        d_ucb_out = ctypes.c_double(0.0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_cpp_two_nn_intrinsic_dim_v817(
+            ctypes.c_uint32(n),
+            ctypes.c_uint32(dim),
+            pts_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.byref(d_mle_out),
+            ctypes.byref(d_ucb_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            raise RuntimeError(f"C++ two_nn_intrinsic_dim falló: {err.message()}")
+
+        return {
+            "d_intrinsic_mle": d_mle_out.value,
+            "d_intrinsic_ucb": d_ucb_out.value,
+        }
+
+    def baraniuk_wakin_feasibility(
+        self,
+        dim_in: int,
+        dim_out: int,
+        intrinsic_dim: float,
+        epsilon: float = 0.1,
+        reach: float = 0.5,
+        volume: float = 100.0,
+        failure_rho: float = 1e-4,
+    ) -> Dict[str, Any]:
+        """Evalúa la suficiencia dimensional de Baraniuk–Wakin en C++."""
+        m_req_out = ctypes.c_double(0.0)
+        is_feas_out = ctypes.c_uint8(0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_cpp_baraniuk_wakin_feasibility_v817(
+            ctypes.c_uint32(dim_in),
+            ctypes.c_uint32(dim_out),
+            ctypes.c_double(intrinsic_dim),
+            ctypes.c_double(epsilon),
+            ctypes.c_double(reach),
+            ctypes.c_double(volume),
+            ctypes.c_double(failure_rho),
+            ctypes.byref(m_req_out),
+            ctypes.byref(is_feas_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            raise RuntimeError(f"C++ baraniuk_wakin_feasibility falló: {err.message()}")
+
+        return {
+            "m_required": m_req_out.value,
+            "is_feasible": bool(is_feas_out.value),
+            "margin": dim_out - m_req_out.value,
+        }
+
+    def gram_ns_polar_restart(self, matrix: np.ndarray, max_total_steps: int = 5) -> Tuple[np.ndarray, int, bool]:
+        """Iteración Polar Gram Newton–Schulz en C++ con reinicio q <= 2."""
+        mat_arr = np.ascontiguousarray(matrix, dtype=np.float64)
+        n, m = mat_arr.shape
+        if n != m:
+            raise ValueError("Gram NS requiere matriz cuadrada")
+
+        q_out = np.zeros_like(mat_arr)
+        steps_out = ctypes.c_uint32(0)
+        conv_out = ctypes.c_uint8(0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_cpp_gram_ns_polar_restart_v817(
+            ctypes.c_uint32(n),
+            mat_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            q_out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.c_uint32(max_total_steps),
+            ctypes.byref(steps_out),
+            ctypes.byref(conv_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            raise RuntimeError(f"C++ gram_ns_polar_restart falló: {err.message()}")
+
+        return q_out, steps_out.value, bool(conv_out.value)
+
+    def auon_matrix_rms_normalize(self, matrix: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Normalización de matriz AuON en C++ (división por sqrt(N))."""
+        mat_arr = np.ascontiguousarray(matrix, dtype=np.float64)
+        rows, cols = mat_arr.shape
+        out_mat = np.zeros_like(mat_arr)
+        rms_out = ctypes.c_double(0.0)
+        err = PolydimErrorV817()
+
+        ret = self.lib.polydim_cpp_auon_matrix_rms_normalize_v817(
+            ctypes.c_uint32(rows),
+            ctypes.c_uint32(cols),
+            mat_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            out_mat.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.byref(rms_out),
+            ctypes.byref(err),
+        )
+
+        if ret != 0:
+            raise RuntimeError(f"C++ auon_matrix_rms_normalize falló: {err.message()}")
+
+        return out_mat, rms_out.value
 
 
 # =============================================================================
