@@ -4,9 +4,9 @@ Batería de Ataque Adversarial y Pruebas Destructivas Extremas POLYDIM V817
 Ejecución en Silicio Físico (AMD A4-6300 Floor / MinGW GCC 14.2 / Rustc 1.98.1)
 
 LOS 3 SABUESOS ADVERSARIALES RED TEAM:
-1. Sabueso 1 (Concurrencia FFI & TLS Race Hunter): 100 hilos concurrentes atacando FFI y memory slabs.
-2. Sabueso 2 (FPU Subnormals, Denormals & Singular Boundary Hunter): Flotantes desnormalizados (1e-315), NaNs, ceros con signo.
-3. Sabueso 3 (Escalamiento Asintótico & Presión de Memoria D=1,000,000): Tensores de 1 Millón de dimensiones y cero leaks.
+1. Sabueso 1 (Concurrencia FFI & TLS Race Hunter): 100 hilos concurrentes atacando FFI y memory slabs con captura de excepciones.
+2. Sabueso 2 (FPU Subnormals, Denormals & Singular Boundary Hunter): Flotantes desnormalizados (1e-315), NaNs, ceros con signo y frontera singular.
+3. Sabueso 3 (Escalamiento Asintótico & Presión de Memoria D=1,000,000): Tensores de 1 Millón de dimensiones y medición de RSS.
 """
 
 import sys
@@ -34,6 +34,35 @@ def banner(msg: str):
     print(f"🔥 [SABUESO ADVERSARIAL] {msg}")
     print("#" * 80)
 
+def get_process_rss_bytes() -> int:
+    """Obtiene la memoria física de trabajo (RSS / Working Set) del proceso en Windows/Linux."""
+    if sys.platform == "win32":
+        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_ulong),
+                ("PageFaultCount", ctypes.c_ulong),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+        counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+        handle = ctypes.windll.kernel32.GetCurrentProcess()
+        if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return counters.WorkingSetSize
+        return 0
+    else:
+        try:
+            with open("/proc/self/statm") as f:
+                return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+        except Exception:
+            return 0
+
 # =============================================================================
 # SABUESO 1: CONCURRENCIA MASIVA FFI & TLS RACE HUNTER (100 HILOS)
 # =============================================================================
@@ -49,12 +78,13 @@ def sabueso_1_concurrency_tls_race():
     tls_isolation_passed = []
 
     def thread_worker(thread_id: int):
-        np.random.seed(thread_id * 777 + int(time.time()))
+        # Generador RNG independiente por hilo (thread-safe)
+        rng = np.random.default_rng(thread_id * 777 + 42)
         dim = 1000
         for it in range(iterations_per_thread):
             # 1. Operación normal en C++ y Rust
-            u = np.random.randn(dim)
-            v = np.random.randn(dim)
+            u = rng.standard_normal(dim)
+            v = rng.standard_normal(dim)
             u /= np.linalg.norm(u)
             v /= np.linalg.norm(v)
 
@@ -67,10 +97,10 @@ def sabueso_1_concurrency_tls_race():
             if abs(ang_r - ang_c) > 1e-4:
                 errors_detected.append(f"Thread {thread_id}: Discrepancia Rust vs C++ {ang_r} vs {ang_c}")
 
-            # 2. Inyección deliberada de error FFI en este hilo para estresar TLS
+            # 2. Inyección de error FFI en este hilo para estresar TLS
             if it % 5 == 0:
                 err_pod = PolydimErrorV817()
-                # Pasar puntero nulo para forzar error 1
+                # Pasar puntero nulo para forzar código de error 1
                 ret = rust_k.lib.polydim_rust_auon_log_cosh_brake_v817(
                     ctypes.c_double(10.0),
                     ctypes.c_double(1.0),
@@ -84,7 +114,7 @@ def sabueso_1_concurrency_tls_race():
                 
                 # Leer TLS inmediatamente
                 last_err = rust_k.get_last_error_string()
-                if "Null pointers" not in last_err and "Null pointer" not in last_err:
+                if "Null pointer" not in last_err and "Null pointers" not in last_err:
                     errors_detected.append(f"Thread {thread_id}: TLS corrupto o pisado por otro hilo: '{last_err}'")
                 
                 # Limpiar error
@@ -117,6 +147,10 @@ def sabueso_1_concurrency_tls_race():
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
         futures = [executor.submit(thread_worker, tid) for tid in range(num_threads)]
         concurrent.futures.wait(futures)
+        for tid, f in enumerate(futures):
+            exc = f.exception()
+            if exc is not None:
+                errors_detected.append(f"Thread {tid}: Excepción no capturada en worker: {exc!r}")
 
     dt = time.perf_counter() - t0
     ops_per_sec = (num_threads * iterations_per_thread) / dt
@@ -130,7 +164,7 @@ def sabueso_1_concurrency_tls_race():
             print(f"     - {e}")
         assert False, "Falla en Sabueso 1: Concurrencia FFI/TLS comprometida"
     else:
-        print("  ✅ SABUESO 1 PASSED: Cero colisiones de TLS, cero corrupción de memoria y concurrencia 100% thread-safe.")
+        print("  ✅ SABUESO 1 PASSED: Aislamiento TLS verificado y concurrencia ejecutada sin colisiones.")
 
 # =============================================================================
 # SABUESO 2: FPU SUBNORMALS, DENORMALS & SINGULAR BOUNDARY HUNTER
@@ -165,7 +199,6 @@ def sabueso_2_subnormals_singular_hunter():
     scale_degenerate = 1e-15
     loss_deg, grad_deg = rust_k.auon_brake(100.0, scale_s=scale_degenerate, lambda_val=1.0)
     assert not math.isnan(loss_deg) and not math.isinf(loss_deg), "Overflow en escala pequeña"
-    # Derivada saturada a lambda * scale_degenerate
     assert abs(grad_deg - scale_degenerate) < 1e-18
 
     # 3. Ataque con Valores Inválidos (NaN / Inf / Parámetros Negativos)
@@ -200,14 +233,14 @@ def sabueso_2_subnormals_singular_hunter():
     print("  [2.4] Atacando métrica geodésica con perturbación singular 1.0 + 1e-15...")
     dim = 5000
     u = np.zeros(dim, dtype=np.float64)
-    u[0] = 1.0 # Vector base canonica
+    u[0] = 1.0
 
-    # Vector con producto punto matemáticamente > 1.0 por flotante acumulado
+    # Perturbación real que hace u^T v > 1.0 antes de clamp
     v_overflow = u.copy()
-    # Simular distorsión
+    v_overflow[0] = 1.0 + 1e-15
     ang_clamp, chord_clamp = rust_k.riemannian_geodesic(u, v_overflow)
     assert not math.isnan(ang_clamp), "Clamp falló: arccos produjo NaN"
-    assert ang_clamp == 0.0, f"Auto-geodésica debe ser 0.0, fue {ang_clamp}"
+    assert ang_clamp <= 1e-6, f"Auto-geodésica debe colapsar a ~0, fue {ang_clamp}"
 
     # Vector nulo degenerado (norma 0)
     u_zero = np.zeros(dim, dtype=np.float64)
@@ -221,7 +254,7 @@ def sabueso_2_subnormals_singular_hunter():
     )
     assert ret_zero == -3, f"Debió rechazar vector con norma cero, obtuvo {ret_zero}"
 
-    print("  ✅ SABUESO 2 PASSED: Resistencia total contra números desnormalizados, ceros con signo, NaNs y singularidades.")
+    print("  ✅ SABUESO 2 PASSED: Resistencia contra números desnormalizados, ceros con signo, NaNs y singularidades.")
 
 # =============================================================================
 # SABUESO 3: ESCALAMIENTO ASINTÓTICO & PRESIÓN DE MEMORIA D=1,000,000
@@ -235,15 +268,15 @@ def sabueso_3_asymptotic_scaling_ram_pressure():
     dim_million = 1_000_000 # 1 Millón de dimensiones (8 MB por vector float64)
     print(f"  [3.1] Asignando vectores continuos de alta dimensión D={dim_million:,} (8 MB cada uno)...")
 
-    np.random.seed(42)
-    u = np.random.randn(dim_million).astype(np.float64)
+    rng = np.random.default_rng(42)
+    u = rng.standard_normal(dim_million).astype(np.float64)
     u /= np.linalg.norm(u)
 
-    v = np.random.randn(dim_million).astype(np.float64)
+    v = rng.standard_normal(dim_million).astype(np.float64)
     v /= np.linalg.norm(v)
 
     # Medir cálculo geodésico en D=1,000,000
-    print("  [3.2] Evaluando geodésica Riemanniana en D=1,000,000 en C++ AVX2 y Rust SIMD...")
+    print("  [3.2] Evaluando geodésica Riemanniana en D=1,000,000 en C++ y Rust...")
     t0 = time.perf_counter()
     ang_c, chord_c = cpp_k.riemannian_geodesic(u, v)
     t_cpp_ms = (time.perf_counter() - t0) * 1000.0
@@ -252,18 +285,20 @@ def sabueso_3_asymptotic_scaling_ram_pressure():
     ang_r, chord_r = rust_k.riemannian_geodesic(u, v)
     t_rust_ms = (time.perf_counter() - t0) * 1000.0
 
-    print(f"     -> C++ AVX2 OpenMP: {t_cpp_ms:.2f} ms | Distancia Angular: {ang_c:.6f} rad")
-    print(f"     -> Rust SIMD:       {t_rust_ms:.2f} ms | Distancia Angular: {ang_r:.6f} rad")
+    print(f"     -> C++ OpenMP: {t_cpp_ms:.2f} ms | Distancia Angular: {ang_c:.6f} rad")
+    print(f"     -> Rust SIMD:   {t_rust_ms:.2f} ms | Distancia Angular: {ang_r:.6f} rad")
     assert abs(ang_c - ang_r) < 1e-5, "Discrepancia en D=1,000,000"
 
-    # 3. Test de Presión de Memoria y Ciclos Repetidos (Zero-Leak)
-    print("  [3.3] Ejecutando 50 ciclos continuos de transferencia de 16 MB en RAM (Cero Memory Leak)...")
+    # 3. Test de Presión de Memoria y Ciclos Repetidos con Verificación de RSS
+    print("  [3.3] Ejecutando 50 ciclos continuos de transferencia de 16 MB en RAM con monitoreo de RSS...")
     payload_16mb = 16 * 1024 * 1024 # 16 MB
     src_payload = np.random.bytes(payload_16mb)
     dst_payload = bytearray(payload_16mb)
     copied_bytes = ctypes.c_size_t(0)
     err = PolydimErrorV817()
     dst_ptr = (ctypes.c_char * payload_16mb).from_buffer(dst_payload)
+
+    rss_before = get_process_rss_bytes()
 
     latencies_16mb_us = []
     for _ in range(50):
@@ -279,11 +314,16 @@ def sabueso_3_asymptotic_scaling_ram_pressure():
         latencies_16mb_us.append((t1 - t0) * 1e6)
         assert ret == 0, "Falla en transferencia de 16 MB"
 
+    rss_after = get_process_rss_bytes()
+    rss_delta_mb = (rss_after - rss_before) / (1024 * 1024) if rss_before > 0 else 0.0
+
     p50_16mb = np.percentile(latencies_16mb_us, 50)
     effective_bw_16mb = (payload_16mb / (p50_16mb * 1e-6)) / 1e9
 
-    print(f"     -> Transferencia de 16 MB: Latencia p50 = {p50_16mb:.2f} us | Ancho de Banda = {effective_bw_16mb:.2f} GB/s")
-    print("  ✅ SABUESO 3 PASSED: Escalamiento D=1,000,000 y transferencias masivas de 16 MB certificadas sin leaks.")
+    print(f"     -> Transferencia de 16 MB: Latencia p50 = {p50_16mb:.2f} µs | Ancho de Banda = {effective_bw_16mb:.2f} GB/s")
+    print(f"     -> Delta RSS Working Set: {rss_delta_mb:.2f} MB tras 50 transferencias (tolerancia < 32 MB)")
+    assert rss_delta_mb < 32.0, f"Fuga de memoria detectada: {rss_delta_mb:.2f} MB"
+    print("  ✅ SABUESO 3 PASSED: Escalamiento D=1,000,000 y transferencias masivas de 16 MB completadas.")
 
 # =============================================================================
 # RUNNER MAESTRO DE LOS 3 SABUESOS
@@ -301,7 +341,7 @@ def run_adversarial_hounds():
     total_time = time.perf_counter() - t_start
 
     print("\n" + "=" * 80)
-    print(f"🏆 VEREDICTO DE LOS 3 SABUESOS: SILICIO BLINDADO (0 FALLAS, EXIT CODE 0) EN {total_time:.2f}s")
+    print(f"📋 RESUMEN DE LOS 3 SABUESOS: 3/3 SABUESOS COMPLETADOS (Exit Code 0) EN {total_time:.2f}s")
     print("=" * 80)
     sys.exit(0)
 

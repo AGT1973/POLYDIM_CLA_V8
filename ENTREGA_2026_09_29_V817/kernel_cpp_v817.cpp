@@ -94,12 +94,16 @@ POLYDIM_EXPORT int polydim_cpp_auon_log_cosh_brake_v817(
     }
 
     const double ln2 = 0.693147180559945309417232121458;
-    double z = residual / scale_s;
+    double z = std::clamp(residual / scale_s, -30.0, 30.0);
     double abs_z = std::abs(z);
 
+    // Forma numéricamente incondicionada sin cancelación catastrófica:
+    // Para |z| <= 20: ln(cosh(z)) = ln(1 + 2*sinh^2(z/2)) = log1p(2 * sinh^2(z/2))
+    // Para |z| > 20:  ln(cosh(z)) = |z| + log1p(exp(-2|z|)) - ln(2)
     double log_cosh_z;
-    if (abs_z > 35.0) {
-        log_cosh_z = abs_z - ln2;
+    if (abs_z <= 20.0) {
+        double s = std::sinh(0.5 * abs_z);
+        log_cosh_z = std::log1p(2.0 * s * s);
     } else {
         log_cosh_z = abs_z + std::log1p(std::exp(-2.0 * abs_z)) - ln2;
     }
@@ -160,7 +164,7 @@ POLYDIM_EXPORT int polydim_cpp_auon_matrix_rms_normalize_v817(
 }
 
 // ============================================================================
-// 3. MÉTRICA GEODÉSICA ANGULAR RIEMANNIANA CORDAL EN S^(D-1) (AVX2 + OpenMP)
+// 3. MÉTRICA GEODÉSICA ANGULAR RIEMANNIANA CORDAL EN S^(D-1) (OpenMP)
 // ============================================================================
 
 POLYDIM_EXPORT int polydim_cpp_riemannian_geodesic_v817(
@@ -205,7 +209,15 @@ POLYDIM_EXPORT int polydim_cpp_riemannian_geodesic_v817(
     }
 
     double chordal_dist = std::sqrt(chordal_sq);
-    double half_chord = std::clamp(chordal_dist / (norm_u + norm_v), 0.0, 1.0);
+    if (chordal_dist < 1e-30) {
+        *angular_dist_out = 0.0;
+        *chordal_dist_out = 0.0;
+        set_error_success(err);
+        return 0;
+    }
+
+    double avg_norm = 0.5 * (norm_u + norm_v);
+    double half_chord = std::clamp(0.5 * chordal_dist / avg_norm, 0.0, 1.0);
     double angular_dist = 2.0 * std::asin(half_chord);
 
     *angular_dist_out = angular_dist;

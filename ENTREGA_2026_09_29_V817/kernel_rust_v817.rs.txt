@@ -114,13 +114,16 @@ pub extern "C" fn polydim_rust_auon_log_cosh_brake_v817(
             return -3;
         }
 
-        let z = residual / scale_s;
+        let z = (residual / scale_s).clamp(-30.0, 30.0);
         let abs_z = z.abs();
         
-        // Forma numéricamente estable de log(cosh(z)) = |z| + log1p(exp(-2|z|)) - ln(2)
+        // Forma numéricamente incondicionada sin cancelación catastrófica:
+        // Para |z| <= 20: ln(cosh(z)) = ln(1 + 2*sinh^2(z/2)) = ln_1p(2 * sinh^2(z/2)) [rel err ~ 1e-16]
+        // Para |z| > 20:  ln(cosh(z)) = |z| + ln_1p(exp(-2|z|)) - ln(2)
         let ln2 = std::f64::consts::LN_2;
-        let log_cosh_z = if abs_z > 35.0 {
-            abs_z - ln2
+        let log_cosh_z = if abs_z <= 20.0 {
+            let s = (0.5 * abs_z).sinh();
+            (2.0 * s * s).ln_1p()
         } else {
             abs_z + (-2.0 * abs_z).exp().ln_1p() - ln2
         };
@@ -261,9 +264,20 @@ pub extern "C" fn polydim_rust_riemannian_geodesic_v817(
             return -3;
         }
 
-        // Distancia cordal normalizada
+        // Distancia cordal incondicionada con protección contra singularidad de arccos
         let chordal_dist = chordal_sq.sqrt();
-        let half_chord = (chordal_dist / (norm_u + norm_v)).clamp(0.0, 1.0);
+        if chordal_dist < 1e-30 {
+            unsafe {
+                *angular_dist_out = 0.0;
+                *chordal_dist_out = 0.0;
+                if !err.is_null() { (*err).write_success(); }
+            }
+            return 0;
+        }
+
+        // Métrica cordal en S^(D-1): theta = 2 * arcsin(chord / (2 * sqrt(norm_u * norm_v)))
+        let avg_norm = 0.5 * (norm_u + norm_v);
+        let half_chord = (0.5 * chordal_dist / avg_norm).clamp(0.0, 1.0);
         let angular_dist = 2.0 * half_chord.asin();
 
         unsafe {
