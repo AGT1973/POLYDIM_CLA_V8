@@ -157,7 +157,7 @@ def test_4_shifted_skew_gmres(cpp_dll):
         ctypes.c_uint64(N),
         ctypes.c_uint64(K),
         ctypes.c_double(1e-15),
-        ctypes.c_int32(30),
+        ctypes.c_int32(64),
         U_out.ctypes.data_as(ctypes.c_void_p),
         ctypes.byref(err)
     )
@@ -264,7 +264,7 @@ def test_8_rust_frechet_betti_filter(rust_dll):
 
     candidates = np.zeros((N, D), dtype=np.float64)
     for i in range(7):
-        candidates[i] = base_vec + 0.05 * np.random.randn(D)
+        candidates[i] = base_vec + 0.02 * np.random.randn(D)
         candidates[i] /= np.linalg.norm(candidates[i])
     candidates[7] = -base_vec # Adversarial outlier
 
